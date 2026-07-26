@@ -1,0 +1,281 @@
+export type FormFieldType =
+  | "text"
+  | "textarea"
+  | "date"
+  | "number"
+  | "select"
+  | "multiselect"
+  | "checkbox";
+
+export interface FormFieldDefinition {
+  key: string;
+  label: string;
+  type: FormFieldType;
+  required?: boolean;
+  options?: string[];
+  hint?: string;
+  span?: "half" | "full";
+}
+
+export interface FormDefinition {
+  code: string;
+  shortCode: string;
+  name: string;
+  stage: string;
+  ownerDepartment: string;
+  approver: string;
+  purpose: string;
+  fields: FormFieldDefinition[];
+}
+
+export const formDefinitions: FormDefinition[] = [
+  {
+    code: "HD/JL-SJ-01A1",
+    shortCode: "SJ-01",
+    name: "新产品开发立项申请表",
+    stage: "立项决策",
+    ownerDepartment: "技术部 / 销售部",
+    approver: "总经理或技术总监",
+    purpose: "记录产品来源、技术目标、市场可行性、风险、成本与盈利预测。",
+    fields: [
+      { key: "source", label: "新产品立项来源", type: "select", required: true, options: ["客户", "行业要求", "企业研发"] },
+      { key: "productName", label: "立项产品名称", type: "text", required: true },
+      { key: "productModel", label: "产品型号", type: "text", required: true },
+      { key: "initiationDate", label: "立项日期", type: "date", required: true },
+      { key: "requiredDate", label: "要求开发完成时间", type: "date", required: true },
+      { key: "functionSummary", label: "功能简介", type: "textarea", required: true, hint: "功能、性能、结构、材质、表面和颜色等", span: "full" },
+      { key: "performance", label: "性能指标", type: "textarea", required: true, span: "full" },
+      { key: "structureMaterial", label: "结构和材质", type: "textarea", span: "full" },
+      { key: "innovation", label: "立项创新点", type: "textarea", required: true, span: "full" },
+      { key: "targetMarket", label: "主要销售市场/行业", type: "text" },
+      { key: "customerDemand", label: "目标客户特点及要求", type: "textarea", span: "full" },
+      { key: "swot", label: "市场竞争与 SWOT 分析", type: "textarea", span: "full" },
+      { key: "riskTypes", label: "市场风险", type: "multiselect", options: ["知识产权", "政策法规", "技术风险", "财务风险", "其他"] },
+      { key: "riskMitigation", label: "风险规避措施", type: "textarea", span: "full" },
+      { key: "targetUnitCost", label: "单台成本控制要求", type: "number" },
+      { key: "prototypeDate", label: "样机完成期", type: "date" },
+      { key: "priceRange", label: "合理定价范围", type: "text" },
+      { key: "annualProfit", label: "新项目年盈利预测", type: "number" },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-02A1",
+    shortCode: "SJ-02",
+    name: "项目设计任务书",
+    stage: "设计策划",
+    ownerDepartment: "技术部",
+    approver: "任务审核 / 任务批准",
+    purpose: "明确用户、型号、设计员、完成期限、设计依据与应交付输出。",
+    fields: [
+      { key: "customerName", label: "用户名称", type: "text", required: true },
+      { key: "productModel", label: "产品型号", type: "text", required: true },
+      { key: "trackingNo", label: "跟踪表编号", type: "text" },
+      { key: "designer", label: "设计员", type: "text", required: true },
+      { key: "requiredDate", label: "要求完成时间", type: "date", required: true },
+      { key: "initiationNo", label: "评审单/立项编号", type: "text", required: true },
+      { key: "checker", label: "校对", type: "text" },
+      { key: "designNoteNo", label: "设计说明号", type: "text" },
+      { key: "externalDataConfirmed", label: "电机外形图及技术数据已确认", type: "checkbox" },
+      { key: "trackingRequired", label: "项目需要跟踪", type: "checkbox" },
+      { key: "designBasis", label: "设计依据", type: "multiselect", required: true, options: ["产品开发/更改评审输入表", "确认的外形图", "技术协议"] },
+      { key: "basicRequirements", label: "设计输入及基本要求", type: "textarea", required: true, span: "full" },
+      { key: "initialPlan", label: "初步设计方案", type: "textarea", required: true, span: "full" },
+      { key: "outputs", label: "设计输出", type: "multiselect", options: ["设计单", "设计说明", "BOM", "外形图", "图纸", "型式试验", "工装", "电机照片", "说明书"] },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-03A1",
+    shortCode: "SJ-03",
+    name: "项目设计开发计划书",
+    stage: "计划与进度",
+    ownerDepartment: "项目负责人",
+    approver: "技术总监",
+    purpose: "关联订单并控制设计、工艺、采购、制造、装配、试验和客户确认节点。",
+    fields: [
+      { key: "listedDate", label: "列入时间", type: "date", required: true },
+      { key: "completionDate", label: "计划完成时间", type: "date", required: true },
+      { key: "orderNo", label: "订单号", type: "text" },
+      { key: "projectName", label: "项目名称", type: "text", required: true },
+      { key: "designNoteNo", label: "设计说明号", type: "text" },
+      { key: "motorCode", label: "电机编码", type: "text" },
+      { key: "owner", label: "负责人", type: "text", required: true },
+      { key: "tracker", label: "跟踪人", type: "text" },
+      { key: "designOutputDate", label: "设计输出完成", type: "date" },
+      { key: "processOutputDate", label: "工艺输出准备完成", type: "date" },
+      { key: "technicalBriefingDate", label: "技术交底时间", type: "date" },
+      { key: "materialReadyDate", label: "物料准备完成时间", type: "date" },
+      { key: "manufacturingDate", label: "部件制造完成时间", type: "date" },
+      { key: "assemblyDate", label: "装配入库完成时间", type: "date" },
+      { key: "typeTestDate", label: "型式试验时间", type: "date" },
+      { key: "customerConfirmDate", label: "客户样机确认完成时间", type: "date" },
+      { key: "summaryMeetingDate", label: "小结会", type: "date" },
+      { key: "conclusion", label: "计划结论", type: "textarea", span: "full" },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-04A1",
+    shortCode: "SJ-04",
+    name: "设计开发输入输出表",
+    stage: "设计输入 / 输出",
+    ownerDepartment: "技术部",
+    approver: "部门主管",
+    purpose: "把标准法规、技术协议和主要技术要求与输出清单对应起来。",
+    fields: [
+      { key: "projectName", label: "项目名称", type: "text", required: true },
+      { key: "dateRange", label: "起止日期", type: "text", required: true },
+      { key: "productModel", label: "型号规格", type: "text", required: true },
+      { key: "budget", label: "预算费用", type: "number" },
+      { key: "standards", label: "标准、法律法规及技术协议主要内容", type: "textarea", required: true, span: "full" },
+      { key: "designContent", label: "设计内容", type: "textarea", required: true, hint: "主要功能、性能、技术指标、主要结构等", span: "full" },
+      { key: "ownerDepartment", label: "设计部门及项目负责人", type: "text", required: true },
+      { key: "outputList", label: "输出清单", type: "textarea", required: true, span: "full" },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-05A1",
+    shortCode: "SJ-05",
+    name: "设计开发评审表",
+    stage: "设计评审",
+    ownerDepartment: "项目负责人",
+    approver: "技术总监",
+    purpose: "评审合同/标准符合性、采购与加工可行性、结构、安全和环境影响。",
+    fields: [
+      { key: "projectName", label: "项目名称", type: "text", required: true },
+      { key: "productModel", label: "型号规格", type: "text", required: true },
+      { key: "developmentStage", label: "设计开发阶段", type: "select", options: ["输入评审", "输出评审", "专项评审"], required: true },
+      { key: "reviewLead", label: "负责人", type: "text", required: true },
+      { key: "reviewers", label: "评审人员/部门/职务", type: "textarea", required: true, span: "full" },
+      { key: "reviewItems", label: "评审项目", type: "multiselect", required: true, options: ["合同、标准符合性", "采购可行性", "加工可行性", "结构合理性", "可维修性", "可检验性", "美观性", "环境影响", "安全性"] },
+      { key: "issues", label: "存在问题及改进建议", type: "textarea", span: "full" },
+      { key: "conclusion", label: "评审结论", type: "select", required: true, options: ["通过", "有条件通过", "不通过"] },
+      { key: "trackingResult", label: "纠正/改进措施跟踪验证结果", type: "textarea", span: "full" },
+      { key: "verifier", label: "验证人", type: "text" },
+      { key: "verifyDate", label: "验证日期", type: "date" },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-06A1",
+    shortCode: "SJ-06",
+    name: "设计开发验证报告",
+    stage: "样机验证",
+    ownerDepartment: "质量部 / 技术部",
+    approver: "技术总监审核、总经理批准",
+    purpose: "记录样品、试验资源、检测摘要、验证结论与问题闭环。",
+    fields: [
+      { key: "projectName", label: "项目名称", type: "text", required: true },
+      { key: "productModel", label: "型号规格", type: "text", required: true },
+      { key: "verificationTeam", label: "验证单位及参加人员", type: "textarea", required: true, span: "full" },
+      { key: "sampleNo", label: "试验样品编号", type: "text", required: true },
+      { key: "testRange", label: "试验起止日期", type: "text", required: true },
+      { key: "inputSummary", label: "设计开发输入综述", type: "textarea", required: true, hint: "性能、功能、技术参数、标准或法规", span: "full" },
+      { key: "equipment", label: "主要试验仪器设备及操作者", type: "textarea", required: true, span: "full" },
+      { key: "testSummary", label: "专项试验/检测报告摘要及结论", type: "textarea", required: true, span: "full" },
+      { key: "conclusion", label: "设计开发验证结论", type: "select", required: true, options: ["通过", "有条件通过", "不通过"] },
+      { key: "followUp", label: "验证结论跟踪结果", type: "textarea", span: "full" },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-07A1",
+    shortCode: "SJ-07",
+    name: "客户试用报告",
+    stage: "客户确认",
+    ownerDepartment: "销售部 / 项目负责人",
+    approver: "客户签署",
+    purpose: "采集客户对适用性、标准/合同符合性和使用满意度的确认。",
+    fields: [
+      { key: "projectName", label: "项目名称", type: "text", required: true },
+      { key: "productModel", label: "产品型号规格", type: "text", required: true },
+      { key: "sampleQuantity", label: "试样数量", type: "number", required: true },
+      { key: "productionDate", label: "生产日期", type: "date" },
+      { key: "customerName", label: "客户名称", type: "text", required: true },
+      { key: "trialRange", label: "试用时间", type: "text", required: true },
+      { key: "address", label: "客户地址", type: "text" },
+      { key: "contact", label: "联系人/电话/传真/邮编", type: "textarea", span: "full" },
+      { key: "trialOpinion", label: "客户试用意见", type: "textarea", required: true, hint: "适用性、符合标准或合同要求的评价", span: "full" },
+      { key: "conclusion", label: "客户试用结论及建议", type: "textarea", required: true, span: "full" },
+      { key: "customerSigner", label: "客户签名", type: "text", required: true },
+      { key: "signedDate", label: "签署日期", type: "date", required: true },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-08A1",
+    shortCode: "SJ-08",
+    name: "新产品鉴定报告",
+    stage: "鉴定确认",
+    ownerDepartment: "技术部",
+    approver: "总经理",
+    purpose: "记录会审/函审过程、鉴定结论、各专业问题及批量生产意见。",
+    fields: [
+      { key: "projectName", label: "项目名称", type: "text", required: true },
+      { key: "productModel", label: "产品型号规格", type: "text", required: true },
+      { key: "method", label: "鉴定方式", type: "select", required: true, options: ["会议鉴定", "函审"] },
+      { key: "meetingDate", label: "会审时间", type: "date" },
+      { key: "meetingLocation", label: "会审地点", type: "text" },
+      { key: "processSummary", label: "鉴定过程及主要内容", type: "textarea", required: true, span: "full" },
+      { key: "conclusion", label: "鉴定结论及建议", type: "textarea", required: true, span: "full" },
+      { key: "designIssues", label: "设计问题", type: "textarea", span: "full" },
+      { key: "processIssues", label: "工艺问题", type: "textarea", span: "full" },
+      { key: "qualityIssues", label: "质量问题", type: "textarea", span: "full" },
+      { key: "correctiveActions", label: "纠正措施跟踪及验证", type: "textarea", span: "full" },
+      { key: "massProductionOpinion", label: "批量生产意见", type: "select", required: true, options: ["同意批量生产", "整改后批量生产", "不同意"] },
+      { key: "appraisers", label: "鉴定人员/单位/职务", type: "textarea", span: "full" },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-09A1",
+    shortCode: "SJ-09",
+    name: "文件、图纸更改通知单",
+    stage: "变更控制",
+    ownerDepartment: "变更提出部门",
+    approver: "校对 / 审批",
+    purpose: "控制客户、工艺或设计变更及库存非通用件的处置和通知。",
+    fields: [
+      { key: "productName", label: "产品名称/文件名称", type: "text", required: true },
+      { key: "partNameModel", label: "零件名称及型号", type: "text" },
+      { key: "drawingNo", label: "图号/文件编号", type: "text", required: true },
+      { key: "changeNo", label: "更改通知编号", type: "text", required: true },
+      { key: "reason", label: "更改原因", type: "textarea", required: true, span: "full" },
+      { key: "nature", label: "更改性质", type: "select", required: true, options: ["临时更改", "更改图纸", "更改CAXA"] },
+      { key: "deadline", label: "更改期限", type: "date", required: true },
+      { key: "method", label: "更改方式", type: "select", required: true, options: ["换版", "换页", "划改"] },
+      { key: "mark", label: "更改标记", type: "text" },
+      { key: "changeCount", label: "更改处数", type: "number" },
+      { key: "notifySupplier", label: "通知供应商", type: "checkbox" },
+      { key: "notifyCustomer", label: "通知客户", type: "checkbox" },
+      { key: "before", label: "变更前", type: "textarea", required: true, span: "full" },
+      { key: "after", label: "变更后", type: "textarea", required: true, span: "full" },
+      { key: "inventoryDisposition", label: "非通用件库存及处理意见", type: "textarea", hint: "报废、用完止、返修、其他", span: "full" },
+      { key: "distribution", label: "发放部门及签收", type: "textarea", span: "full" },
+    ],
+  },
+  {
+    code: "HD/JL-SJ-10A1",
+    shortCode: "SJ-10",
+    name: "项目设计策划书",
+    stage: "设计策划 / 过程控制",
+    ownerDepartment: "技术部 / 工艺科",
+    approver: "任务签发 / 审核 / 批准",
+    purpose: "覆盖输入控制、评审团队、技术难点、过程控制、输出范围与技术性确认。",
+    fields: [
+      { key: "customerName", label: "用户名称", type: "text", required: true },
+      { key: "productModel", label: "产品型号", type: "text", required: true },
+      { key: "trackingNo", label: "跟踪表编号", type: "text" },
+      { key: "designer", label: "设计员", type: "text", required: true },
+      { key: "requiredDate", label: "要求完成时间", type: "date", required: true },
+      { key: "initiationNo", label: "评审单/立项编号", type: "text", required: true },
+      { key: "designBasis", label: "设计依据", type: "multiselect", options: ["产品开发/更改评审输入表", "确认的外形图", "技术协议"] },
+      { key: "inputRequirements", label: "设计输入及基本要求", type: "textarea", required: true, span: "full" },
+      { key: "initialPlan", label: "初步设计方案", type: "textarea", required: true, span: "full" },
+      { key: "reviewTeam", label: "评审团队及决策方案要点", type: "textarea", required: true, span: "full" },
+      { key: "technicalChallenges", label: "技术难点及解决方法", type: "textarea", span: "full" },
+      { key: "outputs", label: "设计输出", type: "multiselect", options: ["设计单", "设计说明", "BOM", "外形图", "图纸", "型式试验", "工装", "电机照片", "说明书", "工艺路线", "质量控制计划", "设备工装", "FMEA"] },
+      { key: "estimatedCost", label: "开发估计费用", type: "number" },
+      { key: "reviewSummary", label: "评审意见汇总及采纳情况", type: "textarea", span: "full" },
+      { key: "technicalConclusion", label: "项目技术性确认结论", type: "select", options: ["确认通过", "整改后确认", "不通过"], required: true },
+    ],
+  },
+];
+
+export const formDefinitionMap = new Map(
+  formDefinitions.map((definition) => [definition.code, definition]),
+);
