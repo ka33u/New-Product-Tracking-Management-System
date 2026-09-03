@@ -41,3 +41,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/tmp/
+/.local-server.log
+/.local-server.err.log
+/draw-wire-direct-drive-selector/

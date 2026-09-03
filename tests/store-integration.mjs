@@ -5,339 +5,162 @@ import { DatabaseSync } from "node:sqlite";
 import vm from "node:vm";
 
 const require = createRequire(import.meta.url);
-const typescriptRuntime =
-  process.env.TYPESCRIPT_RUNTIME || require.resolve("typescript");
-const ts = require(typescriptRuntime);
+const ts = require(process.env.TYPESCRIPT_RUNTIME || require.resolve("typescript"));
 
 class Prepared {
-  constructor(database, sql, values = []) {
-    this.database = database;
-    this.sql = sql;
-    this.values = values;
-  }
-
-  bind(...values) {
-    return new Prepared(this.database, this.sql, values);
-  }
-
-  async first() {
-    return this.database.prepare(this.sql).get(...this.values) ?? null;
-  }
-
-  async all() {
-    return { results: this.database.prepare(this.sql).all(...this.values) };
-  }
-
-  async run() {
-    return this.database.prepare(this.sql).run(...this.values);
-  }
+  constructor(database, sql, values = []) { this.database = database; this.sql = sql; this.values = values; }
+  bind(...values) { return new Prepared(this.database, this.sql, values); }
+  async first() { return this.database.prepare(this.sql).get(...this.values) ?? null; }
+  async all() { return { results: this.database.prepare(this.sql).all(...this.values) }; }
+  async run() { return this.database.prepare(this.sql).run(...this.values); }
 }
-
 class D1Adapter {
-  constructor() {
-    this.database = new DatabaseSync(":memory:");
-    this.database.exec("PRAGMA foreign_keys=ON");
-  }
-
-  prepare(sql) {
-    return new Prepared(this.database, sql);
-  }
-
+  constructor() { this.database = new DatabaseSync(":memory:"); this.database.exec("PRAGMA foreign_keys=ON"); }
+  prepare(sql) { return new Prepared(this.database, sql); }
   async batch(statements) {
-    const results = [];
-    this.database.exec("BEGIN");
-    try {
-      for (const statement of statements) {
-        results.push(await statement.run());
-      }
-      this.database.exec("COMMIT");
-      return results;
-    } catch (error) {
-      this.database.exec("ROLLBACK");
-      throw error;
-    }
+    const results = []; this.database.exec("BEGIN");
+    try { for (const statement of statements) results.push(await statement.run()); this.database.exec("COMMIT"); return results; }
+    catch (error) { this.database.exec("ROLLBACK"); throw error; }
   }
 }
-
 function transpile(source, fileName) {
-  return ts.transpileModule(source, {
-    fileName,
-    compilerOptions: {
-      target: ts.ScriptTarget.ES2022,
-      module: ts.ModuleKind.ESNext,
-      moduleResolution: ts.ModuleResolutionKind.Bundler,
-    },
-  }).outputText;
+  return ts.transpileModule(source, { fileName, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler } }).outputText;
 }
-
 async function buildStoreModule(database) {
-  const context = vm.createContext({
-    console,
-    crypto,
-    Date,
-    Intl,
-    JSON,
-    Math,
-    Object,
-    Promise,
-    Set,
-    String,
-    Number,
-    Boolean,
-    Array,
-    Error,
-    process: { env: { NODE_ENV: "development" } },
-  });
-  const sources = {
-    "/db/store.ts": await readFile(new URL("../db/store.ts", import.meta.url), "utf8"),
-    "/lib/forms.ts": await readFile(new URL("../lib/forms.ts", import.meta.url), "utf8"),
-    "/lib/permissions.ts": await readFile(
-      new URL("../lib/permissions.ts", import.meta.url),
-      "utf8",
-    ),
-  };
+  const context = vm.createContext({ console, crypto, Date, Intl, JSON, Math, Object, Promise, Map, Set, String, Number, Boolean, Array, Error, RegExp, process: { env: { NODE_ENV: "development" } } });
+  const paths = ["/db/store-v2.ts", "/lib/npd-v2.ts", "/lib/access-v2.ts", "/lib/forms.ts", "/lib/sheets-v2.ts"];
   const modules = new Map();
-  for (const [identifier, source] of Object.entries(sources)) {
-    modules.set(
-      identifier,
-      new vm.SourceTextModule(transpile(source, identifier), {
-        context,
-        identifier,
-      }),
-    );
+  for (const path of paths) {
+    const source = await readFile(new URL(`..${path}`, import.meta.url), "utf8");
+    modules.set(path, new vm.SourceTextModule(transpile(source, path), { context, identifier: path }));
   }
-  modules.set(
-    "cloudflare:workers",
-    new vm.SyntheticModule(
-      ["env"],
-      function initialize() {
-        this.setExport("env", { DB: database });
-      },
-      { context, identifier: "cloudflare:workers" },
-    ),
-  );
-
+  modules.set("cloudflare:workers", new vm.SyntheticModule(["env"], function initialize() { this.setExport("env", { DB: database }); }, { context, identifier: "cloudflare:workers" }));
   const resolve = (specifier, parent) => {
     if (specifier === "cloudflare:workers") return specifier;
-    const base = new URL(parent, "file:///");
-    const resolved = new URL(specifier, base);
-    return `${resolved.pathname}.ts`;
+    const resolved = new URL(specifier, new URL(parent, "file:///"));
+    return resolved.pathname.endsWith(".ts") ? resolved.pathname : `${resolved.pathname}.ts`;
   };
   const linker = async (specifier, referencingModule) => {
-    const identifier = resolve(specifier, referencingModule.identifier);
-    const target = modules.get(identifier);
-    if (!target) {
-      throw new Error(
-        `Cannot resolve ${specifier} from ${referencingModule.identifier} (${identifier})`,
-      );
-    }
+    const identifier = resolve(specifier, referencingModule.identifier); const target = modules.get(identifier);
+    if (!target) throw new Error(`Cannot resolve ${specifier} from ${referencingModule.identifier} (${identifier})`);
     return target;
   };
-  await modules.get("/db/store.ts").link(linker);
-  await modules.get("/db/store.ts").evaluate();
-  return modules.get("/db/store.ts").namespace;
+  const entry = modules.get("/db/store-v2.ts"); await entry.link(linker); await entry.evaluate(); return entry.namespace;
 }
 
 const database = new D1Adapter();
 const store = await buildStoreModule(database);
-await store.ensureDatabase();
+await store.ensureNpdDatabase();
 
-const admin = await store.resolveCurrentUser(null, null);
-assert.equal(admin.role, "system_admin");
-let snapshot = await store.getWorkspaceSnapshot();
-assert.equal(snapshot.projects.length, 5);
-assert.equal(snapshot.users.length, 12);
+const admin = await store.resolveNpdCurrentUser(null, null);
+const sales = await store.resolveNpdCurrentUser("sales@hengda-motor.local", "徐杰");
+const design = await store.resolveNpdCurrentUser("design@hengda-motor.local", "王琳");
+const production = await store.resolveNpdCurrentUser("production@hengda-motor.local", "吴军");
+const tester = await store.resolveNpdCurrentUser("tester@hengda-motor.local", "赵敏");
+const quality = await store.resolveNpdCurrentUser("quality@hengda-motor.local", "周宁");
+assert.deepEqual([admin.role, sales.role, design.role, production.role, tester.role, quality.role], ["admin", "sales", "design", "production", "tester", "quality"]);
+
+let snapshot = await store.getNpdWorkspaceSnapshot(admin);
+assert.equal(snapshot.projects.length, 4);
+assert.equal(snapshot.users.length, 6);
 assert.equal(snapshot.orders.length, 5);
-assert.equal(snapshot.milestones.length, 45);
+assert.equal(snapshot.motors.length, 7);
+assert.equal(snapshot.sheets.length, 40);
+assert.equal(snapshot.sheets.filter((sheet) => sheet.projectId === "npd-p-001").length, 10);
 
-const newOrder = await store.createSalesOrder(
-  {
-    orderNo: "SO-TEST-001",
-    customerId: "c-003",
-    productModel: "YKK-355M-4",
-    quantity: 2,
-    amount: 280000,
-    currency: "CNY",
-    deliveryDate: "2027-12-20",
-  },
-  admin,
-);
-const newProject = await store.createProject(
-  {
-    name: "集成测试高温电机",
-    productModel: "YKK-355M-4",
-    category: "全新产品",
-    source: "客户",
-    customerId: "c-003",
-    orderId: newOrder.id,
-    plannedEnd: "2027-12-01",
-    budget: 500000,
-    priority: "high",
-    description: "验证订单、表单、审批和阶段门的真实数据闭环。",
-  },
-  admin,
-);
-
-await store.saveFormRecord(
-  newProject.id,
-  "HD/JL-SJ-01A1",
-  {
-    source: "客户",
-    productName: "集成测试高温电机",
-    productModel: "YKK-355M-4",
-    initiationDate: "2026-07-23",
-    requiredDate: "2027-12-01",
-    functionSummary: "高温循环风机驱动",
-    performance: "满足技术协议和温升要求",
-    innovation: "绝缘和冷却结构优化",
-  },
-  true,
-  admin,
-);
-snapshot = await store.getWorkspaceSnapshot();
-const initiationApproval = snapshot.approvals.find(
-  (approval) =>
-    approval.projectId === newProject.id &&
-    approval.formCode === "HD/JL-SJ-01A1",
-);
-assert.ok(initiationApproval);
-await store.decideApproval(
-  initiationApproval.id,
-  "approved",
-  "立项资料齐套，同意进入设计策划。",
-  admin,
-);
-snapshot = await store.getWorkspaceSnapshot();
-const initiation = snapshot.milestones.find(
-  (milestone) =>
-    milestone.projectId === newProject.id && milestone.gateCode === "initiation",
-);
-await store.updateMilestone(
-  initiation.id,
-  "completed",
-  100,
-  "立项审批完成，项目团队与资源已确认。",
-  initiation.plannedDate,
-  admin,
-);
-snapshot = await store.getWorkspaceSnapshot();
-assert.equal(
-  snapshot.projects.find((project) => project.id === newProject.id).stage,
-  "planning",
-);
-
-const planning = snapshot.milestones.find(
-  (milestone) =>
-    milestone.projectId === newProject.id && milestone.gateCode === "planning",
-);
+await assert.rejects(() => store.createNpdUser({
+  email: "new.designer@hengda-motor.local", name: "新设计员", department: "技术部",
+  role: "design", active: true,
+}, production), /只有管理员/);
+const newUser = await store.createNpdUser({
+  email: "new.designer@hengda-motor.local", name: "新设计员", department: "技术部·设计科",
+  role: "design", active: true,
+}, admin);
+assert.equal((await store.resolveNpdCurrentUser(newUser.email, newUser.name)).id, newUser.id);
+await assert.rejects(() => store.createNpdUser({
+  email: "NEW.DESIGNER@hengda-motor.local", name: "重复账户", department: "技术部",
+  role: "design", active: true,
+}, admin), /登录邮箱已存在/);
+await store.updateNpdUser({
+  userId: newUser.id, email: "designer2@hengda-motor.local", name: "陈工",
+  department: "技术部·设计二科", role: "design", active: true,
+}, admin);
+snapshot = await store.getNpdWorkspaceSnapshot(admin);
+assert.equal(snapshot.users.find((user) => user.id === newUser.id).name, "陈工");
+await store.updateNpdUser({
+  userId: newUser.id, email: "designer2@hengda-motor.local", name: "陈工",
+  department: "技术部·设计二科", role: "design", active: false,
+}, admin);
 await assert.rejects(
-  store.updateMilestone(
-    planning.id,
-    "completed",
-    100,
-    "尝试绕过必需的任务书和开发计划。",
-    planning.plannedDate,
-    admin,
-  ),
-  /HD\/JL-SJ-02A1.*HD\/JL-SJ-03A1/,
+  () => store.resolveNpdCurrentUser("designer2@hengda-motor.local", "陈工"),
+  /账号已停用/,
 );
+await assert.rejects(() => store.updateNpdUser({
+  userId: admin.id, email: admin.email, name: admin.name, department: admin.department,
+  role: "sales", active: true,
+}, admin), /至少一名有效管理员/);
 
-await store.createIssue(
-  {
-    projectId: newProject.id,
-    title: "高温绝缘体系寿命数据待补充",
-    category: "技术",
-    severity: "high",
-    ownerId: "u-design",
-    dueDate: "2026-08-15",
-  },
-  admin,
-);
-snapshot = await store.getWorkspaceSnapshot();
-const issue = snapshot.issues.find((item) => item.projectId === newProject.id);
-assert.ok(issue);
-await store.resolveIssue(issue.id, "补充供应商寿命曲线并完成设计复核。", admin);
-await store.setProjectPaused(
-  newProject.id,
-  true,
-  "等待客户确认高温工况边界。",
-  admin,
-);
-await store.setProjectPaused(
-  newProject.id,
-  false,
-  "客户边界已确认，恢复设计。",
-  admin,
-);
+await assert.rejects(() => store.createNpdProject({}, production), /只有销售、设计和管理员/);
+await assert.rejects(() => store.createNpdSalesOrder({}, production), /只有销售或管理员/);
+const order = await store.createNpdSalesOrder({
+  orderNo: "SO-TEST-2026-001", customerId: "npd-c-001",
+  productSummary: "YBX5-160M/180M 集成测试订单", quantity: 3, amount: 528000,
+  currency: "CNY", orderDate: "2026-08-29", deliveryDate: "2027-03-10",
+}, sales);
+const created = await store.createNpdProject({
+  name: "集成测试防爆电机系列", seriesName: "YBX5 测试系列", category: "全新产品", source: "客户订单",
+  customerId: "npd-c-001", ownerId: sales.id, productionId: production.id, testerId: tester.id,
+  qualityId: quality.id, plannedStart: "2026-08-29", plannedEnd: "2027-02-28", priority: "high",
+  riskLevel: "medium", description: "验证多规格、分权、阶段门、试验、质量和导出数据链。", orderIds: [order.id],
+  motors: [
+    { model: "YBX5-160M-4", motorCode: "TEST-1604", ratedPower: "11kW", voltage: "380V", frequency: "50Hz", poles: "4", speed: "1460r/min", frameSize: "160M", mounting: "B3", quantity: 2, inspectionRequirement: "隔爆面、效率、温升、振动及装配尺寸全检", testRequirement: "效率、温升、堵转、隔爆结构验证", plannedDate: "2027-01-20" },
+    { model: "YBX5-180M-4", motorCode: "TEST-1804", ratedPower: "18.5kW", voltage: "380V", frequency: "50Hz", poles: "4", speed: "1470r/min", frameSize: "180M", mounting: "B3", quantity: 1, inspectionRequirement: "隔爆面、效率、温升、振动及装配尺寸全检", testRequirement: "效率、温升、堵转、隔爆结构验证", plannedDate: "2027-02-02" },
+  ],
+}, sales);
 
-const change = await store.createChangeRequest(
-  {
-    projectId: "p-012",
-    changeType: "更改图纸",
-    title: "验证定型后变更闭环",
-    reason: "集成测试验证定型项目仍可按受控流程变更",
-    affectedObject: "总装图 TEST-001",
-    supplierNotice: false,
-    customerNotice: false,
-    disposition: "用完止",
-    dueDate: "2026-08-30",
-  },
-  admin,
-);
-snapshot = await store.getWorkspaceSnapshot();
-const createdChange = snapshot.changes.find(
-  (item) => item.changeNo === change.changeNo,
-);
-await store.decideChangeRequest(
-  createdChange.id,
-  "approved",
-  "影响分析完整，同意实施。",
-  admin,
-);
-await store.verifyChangeRequest(
-  createdChange.id,
-  "图纸与受控文件已换版，样件复测满足要求。",
-  admin,
-);
+snapshot = await store.getNpdWorkspaceSnapshot(admin);
+assert.equal(snapshot.projects.length, 5);
+assert.equal(snapshot.orders.find((item) => item.id === order.id).projectId, created.id);
+assert.equal(snapshot.motors.filter((motor) => motor.projectId === created.id).length, 2);
+assert.equal(snapshot.sheets.filter((sheet) => sheet.projectId === created.id).length, 10);
+assert.equal(snapshot.members.filter((member) => member.projectId === created.id).length, 4);
+assert.ok((await store.getNpdWorkspaceSnapshot(quality)).projects.some((project) => project.id === created.id));
+assert.ok(!(await store.getNpdWorkspaceSnapshot(design)).projects.some((project) => project.id === created.id));
+await store.assignProjectMember(created.id, design.id, "设计输出、图纸与检验试验要求维护", sales);
 
-snapshot = await store.getWorkspaceSnapshot();
-const derivationGate = snapshot.milestones.find(
-  (milestone) =>
-    milestone.projectId === "p-015" && milestone.gateCode === "confirmation",
-);
-await store.waiveMilestone(
-  derivationGate.id,
-  "派生产品沿用已验证电磁与结构方案，仅调整出口标识，客户试用证据覆盖确认风险。",
-  admin,
-);
-await store.terminateProject(
-  newProject.id,
-  "客户取消订单技术方案，已通知销售、采购和制造，现有设计资料转入项目终止档案。",
-  admin,
-);
-await store.setOrderLink(newOrder.id, null, admin);
+await assert.rejects(() => store.saveNpdFormRecord(created.id, "HD/JL-SJ-01A1", { source: "客户" }, true, sales), /提交前请完成/);
+await store.saveNpdFormRecord(created.id, "HD/JL-SJ-01A1", {
+  source: "客户", productName: "集成测试防爆电机系列", productModel: "YBX5-160M-4 / YBX5-180M-4",
+  initiationDate: "2026-08-29", requiredDate: "2027-02-28", functionSummary: "隔爆高效驱动",
+  performance: "满足技术协议和能效要求", innovation: "隔爆结构与高效电磁方案平台化",
+}, true, sales);
+snapshot = await store.getNpdWorkspaceSnapshot(sales);
+const initiation = snapshot.sheets.find((sheet) => sheet.projectId === created.id && sheet.code === "initiation");
+await store.updateProjectSheet(created.id, "initiation", { status: "completed", progress: 100, plannedDate: initiation.plannedDate, note: "立项资料齐套。" }, sales);
+const inputOutput = (await store.getNpdWorkspaceSnapshot(sales)).sheets.find((sheet) => sheet.projectId === created.id && sheet.code === "input_output");
+await assert.rejects(() => store.updateProjectSheet(created.id, "input_output", { status: "completed", progress: 100, plannedDate: inputOutput.plannedDate, note: "尝试绕过输入输出表单。" }, sales), /受控表单尚未提交/);
 
-snapshot = await store.getWorkspaceSnapshot();
-assert.equal(
-  snapshot.projects.find((project) => project.id === newProject.id).status,
-  "cancelled",
-);
-assert.equal(
-  snapshot.changes.find((item) => item.id === createdChange.id).status,
-  "verified",
-);
-assert.equal(
-  snapshot.milestones.find((item) => item.id === derivationGate.id).status,
-  "waived",
-);
-assert.equal(
-  snapshot.orders.find((order) => order.id === newOrder.id).projectId,
-  null,
-);
+await store.addPartItem({ projectId: created.id, motorId: null, partNo: "YBX5-FAN", name: "低噪声风扇", specification: "160-180 通用", material: "PA66-GF30", quantity: 2, sourceType: "外购", designOutputRef: "DO-YBX5-COM-04", inspectionRequirement: "外观、关键尺寸、材质证明全检", testRequirement: "1.2 倍超速 2min", plannedDate: "2026-12-20" }, design);
+snapshot = await store.getNpdWorkspaceSnapshot(admin);
+const part = snapshot.parts.find((item) => item.projectId === created.id);
+await assert.rejects(() => store.confirmPartItem(part.id, "completed", "越权确认", sales), /只有生产或管理员/);
+await store.confirmPartItem(part.id, "completed", "物料检验合格并完成入库。", production);
 
-console.log(
-  "Store integration OK:",
-  `${snapshot.projects.length} projects,`,
-  `${snapshot.orders.length} orders,`,
-  `${snapshot.activities.length} recent audit events`,
-);
+const motor = snapshot.motors.find((item) => item.projectId === created.id);
+await assert.rejects(() => store.updateMotorRequirements(motor.id, "新检验要求", "新试验要求", production), /只有设计/);
+await assert.rejects(() => store.createTestReport({ projectId: created.id, motorId: motor.id, reportNo: "TR-TEST-001", reportType: "型式试验", title: "越权报告", requirementRef: motor.testRequirement, testDate: "2026-12-30", result: "合格", conclusion: "", documentId: null }, production), /只有试验员/);
+await store.createTestReport({ projectId: created.id, motorId: motor.id, reportNo: "TR-TEST-001", reportType: "型式试验", title: `${motor.model} 型式试验报告`, requirementRef: motor.testRequirement, testDate: "2026-12-30", result: "合格", conclusion: "测试指标满足设计要求。", documentId: null }, tester);
+await store.createInspectionRecord({ projectId: created.id, itemType: "motor", motorId: motor.id, partItemId: null, inspectionDate: "2026-12-29", result: "合格", conclusion: "整机检验合格。", documentId: null }, quality);
+
+snapshot = await store.getNpdWorkspaceSnapshot(admin);
+const inspection = snapshot.inspections.find((item) => item.projectId === created.id && item.motorId === motor.id);
+assert.equal(inspection.inspectionRequirement, motor.inspectionRequirement);
+assert.match(inspection.designOutputRef, new RegExp(motor.model));
+assert.ok(snapshot.activities.filter((item) => item.projectId === created.id).length >= 7);
+const archive = await store.getNpdProjectArchiveData(created.id, admin);
+assert.equal(archive.motors.length, 2);
+assert.equal(archive.parts.length, 1);
+assert.equal(archive.tests.length, 1);
+assert.equal(archive.inspections.length, 1);
+
+console.log("V2 store integration OK:", `${snapshot.projects.length} projects,`, `${snapshot.motors.length} motors,`, `${snapshot.activities.length} timestamped events`);

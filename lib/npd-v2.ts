@@ -1,0 +1,314 @@
+export type NpdRole =
+  | "admin"
+  | "sales"
+  | "design"
+  | "production"
+  | "tester"
+  | "quality";
+
+export type ProjectStatus =
+  | "draft"
+  | "active"
+  | "paused"
+  | "completed"
+  | "cancelled";
+
+export type RiskLevel = "low" | "medium" | "high" | "critical";
+
+export type SheetCode =
+  | "initiation"
+  | "input_output"
+  | "development_plan"
+  | "design_review"
+  | "parts_plan"
+  | "verification"
+  | "quality_inspection"
+  | "customer_trial"
+  | "identification"
+  | "change_archive";
+
+export type SheetStatus =
+  | "not_started"
+  | "in_progress"
+  | "pending_review"
+  | "completed"
+  | "blocked";
+
+export interface NpdUser {
+  id: string;
+  email: string;
+  name: string;
+  department: string;
+  role: NpdRole;
+  roleLabel: string;
+  active: boolean;
+  avatar: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NpdCustomer {
+  id: string;
+  code: string;
+  name: string;
+  industry: string;
+  contact: string;
+  phone: string;
+}
+
+export interface NpdSalesOrder {
+  id: string;
+  orderNo: string;
+  customerId: string;
+  customerName: string;
+  projectId: string | null;
+  projectCode: string;
+  productSummary: string;
+  quantity: number;
+  amount: number;
+  currency: string;
+  orderDate: string;
+  deliveryDate: string;
+  status: string;
+  createdBy: string;
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectMember {
+  id: string;
+  projectId: string;
+  userId: string;
+  userName: string;
+  role: NpdRole;
+  roleLabel: string;
+  responsibility: string;
+  createdAt: string;
+}
+
+export interface ProjectMotor {
+  id: string;
+  projectId: string;
+  model: string;
+  motorCode: string;
+  ratedPower: string;
+  voltage: string;
+  frequency: string;
+  poles: string;
+  speed: string;
+  frameSize: string;
+  mounting: string;
+  quantity: number;
+  inspectionRequirement: string;
+  testRequirement: string;
+  plannedDate: string;
+  actualDate: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NpdProject {
+  id: string;
+  code: string;
+  name: string;
+  seriesName: string;
+  category: string;
+  source: string;
+  customerId: string;
+  customerName: string;
+  initiatorId: string;
+  initiatorName: string;
+  ownerId: string;
+  ownerName: string;
+  status: ProjectStatus;
+  riskLevel: RiskLevel;
+  currentSheetCode: SheetCode;
+  currentSheetTitle: string;
+  progress: number;
+  plannedStart: string;
+  plannedEnd: string;
+  actualEnd: string | null;
+  priority: string;
+  description: string;
+  motorCount: number;
+  overdueDays: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectSheet {
+  id: string;
+  projectId: string;
+  code: SheetCode;
+  title: string;
+  sortOrder: number;
+  ownerRole: NpdRole;
+  ownerRoleLabel: string;
+  status: SheetStatus;
+  progress: number;
+  plannedDate: string;
+  actualDate: string | null;
+  version: number;
+  note: string;
+  updatedBy: string;
+  updatedByName: string;
+  updatedAt: string;
+}
+
+export interface NpdFormRecord {
+  id: string;
+  projectId: string;
+  formCode: string;
+  sheetCode: SheetCode;
+  status: "draft" | "submitted";
+  version: number;
+  payload: Record<string, string | number | boolean>;
+  updatedBy: string;
+  updatedByName: string;
+  updatedAt: string;
+}
+
+export interface PartItem {
+  id: string;
+  projectId: string;
+  motorId: string | null;
+  motorModel: string;
+  partNo: string;
+  name: string;
+  specification: string;
+  material: string;
+  quantity: number;
+  sourceType: string;
+  designOutputRef: string;
+  inspectionRequirement: string;
+  testRequirement: string;
+  plannedDate: string;
+  actualDate: string | null;
+  status: string;
+  confirmedBy: string | null;
+  confirmedByName: string;
+  confirmedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestReport {
+  id: string;
+  projectId: string;
+  motorId: string;
+  motorModel: string;
+  reportNo: string;
+  reportType: string;
+  title: string;
+  requirementRef: string;
+  testDate: string;
+  result: string;
+  conclusion: string;
+  documentId: string | null;
+  fileName: string;
+  submittedBy: string;
+  submittedByName: string;
+  createdAt: string;
+}
+
+export interface InspectionRecord {
+  id: string;
+  projectId: string;
+  motorId: string | null;
+  motorModel: string;
+  partItemId: string | null;
+  itemName: string;
+  itemType: "motor" | "part";
+  inspectionRequirement: string;
+  designOutputRef: string;
+  inspectionDate: string;
+  result: string;
+  conclusion: string;
+  documentId: string | null;
+  fileName: string;
+  inspectorId: string;
+  inspectorName: string;
+  createdAt: string;
+}
+
+export interface NpdDocument {
+  id: string;
+  projectId: string;
+  sheetCode: SheetCode;
+  motorId: string | null;
+  linkedRecordId: string | null;
+  kind: string;
+  fileName: string;
+  objectKey: string;
+  contentType: string;
+  size: number;
+  version: string;
+  uploadedBy: string;
+  uploadedByName: string;
+  createdAt: string;
+}
+
+export interface NpdActivity {
+  id: string;
+  projectId: string | null;
+  projectCode: string;
+  actorId: string;
+  actorName: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  detail: string;
+  createdAt: string;
+}
+
+export interface DashboardPreference {
+  periodMode: "year" | "half" | "month" | "custom";
+  periodValue: string;
+  customStart: string;
+  customEnd: string;
+  visibleMetrics: string[];
+}
+
+export interface NpdWorkspaceSnapshot {
+  projects: NpdProject[];
+  customers: NpdCustomer[];
+  orders: NpdSalesOrder[];
+  users: NpdUser[];
+  members: ProjectMember[];
+  motors: ProjectMotor[];
+  sheets: ProjectSheet[];
+  formRecords: NpdFormRecord[];
+  parts: PartItem[];
+  testReports: TestReport[];
+  inspections: InspectionRecord[];
+  documents: NpdDocument[];
+  activities: NpdActivity[];
+  dashboardPreference: DashboardPreference;
+}
+
+export const roleLabels: Record<NpdRole, string> = {
+  admin: "管理员",
+  sales: "销售",
+  design: "设计",
+  production: "生产",
+  tester: "试验员",
+  quality: "质量",
+};
+
+export const sheetStatusLabels: Record<SheetStatus, string> = {
+  not_started: "未开始",
+  in_progress: "进行中",
+  pending_review: "待确认",
+  completed: "已完成",
+  blocked: "受阻",
+};
+
+export const projectStatusLabels: Record<ProjectStatus, string> = {
+  draft: "草稿",
+  active: "进行中",
+  paused: "已暂停",
+  completed: "已完成",
+  cancelled: "已终止",
+};

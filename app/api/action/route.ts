@@ -1,91 +1,41 @@
 import { NextResponse } from "next/server";
 import { getChatGPTUser } from "../../chatgpt-auth";
 import {
-  createChangeRequest,
-  createIssue,
-  createProject,
-  createSalesOrder,
-  decideChangeRequest,
-  decideApproval,
-  resolveCurrentUser,
-  resolveIssue,
-  saveFormRecord,
-  setOrderLink,
-  setProjectPaused,
-  terminateProject,
-  updateUserAccess,
-  updateMilestone,
-  verifyChangeRequest,
-  waiveMilestone,
-} from "../../../db/store";
-import type { GateStatus, RoleKey } from "../../../lib/domain";
-import { hasPermission, type Permission } from "../../../lib/permissions";
+  addPartItem,
+  addProjectMotor,
+  assignProjectMember,
+  confirmPartItem,
+  createInspectionRecord,
+  createNpdProject,
+  createNpdSalesOrder,
+  createNpdUser,
+  createTestReport,
+  linkNpdSalesOrder,
+  resolveNpdCurrentUser,
+  saveDashboardPreference,
+  saveNpdFormRecord,
+  setNpdProjectStatus,
+  updateMotorRequirements,
+  updateNpdUser,
+  updateProjectSheet,
+} from "../../../db/store-v2";
+import type {
+  DashboardPreference,
+  NpdRole,
+  SheetCode,
+  SheetStatus,
+} from "../../../lib/npd-v2";
 
 export const dynamic = "force-dynamic";
 
 type ActionBody =
-  | { kind: "create_project"; payload: Parameters<typeof createProject>[0] }
+  | { kind: "create_project"; payload: Parameters<typeof createNpdProject>[0] }
+  | { kind: "create_order"; payload: Parameters<typeof createNpdSalesOrder>[0] }
+  | { kind: "link_order"; payload: { orderId: string; projectId: string | null } }
+  | { kind: "add_motor"; payload: { projectId: string; motor: Parameters<typeof addProjectMotor>[1] } }
   | {
-      kind: "update_milestone";
-      payload: {
-        milestoneId: string;
-        status: GateStatus;
-        progress: number;
-        note: string;
-        plannedDate: string;
-      };
-    }
-  | {
-      kind: "create_order";
-      payload: Parameters<typeof createSalesOrder>[0];
-    }
-  | {
-      kind: "waive_milestone";
-      payload: { milestoneId: string; reason: string };
-    }
-  | {
-      kind: "set_project_paused";
-      payload: { projectId: string; paused: boolean; reason: string };
-    }
-  | {
-      kind: "terminate_project";
-      payload: { projectId: string; reason: string };
-    }
-  | {
-      kind: "set_order_link";
-      payload: { orderId: string; projectId: string | null };
-    }
-  | {
-      kind: "decide_approval";
-      payload: {
-        approvalId: string;
-        decision: "approved" | "rejected";
-        comment: string;
-      };
-    }
-  | {
-      kind: "create_change";
-      payload: Parameters<typeof createChangeRequest>[0];
-    }
-  | {
-      kind: "decide_change";
-      payload: {
-        changeId: string;
-        decision: "approved" | "rejected";
-        comment: string;
-      };
-    }
-  | {
-      kind: "verify_change";
-      payload: { changeId: string; verification: string };
-    }
-  | {
-      kind: "create_issue";
-      payload: Parameters<typeof createIssue>[0];
-    }
-  | {
-      kind: "resolve_issue";
-      payload: { issueId: string; resolution: string };
+      kind: "update_motor_requirements";
+      payload: { motorId: string; inspectionRequirement: string; testRequirement: string };
     }
   | {
       kind: "save_form";
@@ -97,146 +47,84 @@ type ActionBody =
       };
     }
   | {
-      kind: "update_user";
+      kind: "update_sheet";
       payload: {
-        userId: string;
-        role: RoleKey;
-        department: string;
-        active: boolean;
+        projectId: string;
+        sheetCode: SheetCode;
+        status: SheetStatus;
+        progress: number;
+        plannedDate: string;
+        note: string;
       };
-    };
-
-const requiredPermission: Record<ActionBody["kind"], Permission> = {
-  create_project: "project:create",
-  update_milestone: "project:update",
-  waive_milestone: "project:tailor",
-  set_project_paused: "project:update",
-  terminate_project: "project:close",
-  create_order: "order:manage",
-  set_order_link: "order:link",
-  decide_approval: "approval:decide",
-  create_change: "change:create",
-  decide_change: "change:approve",
-  verify_change: "change:approve",
-  create_issue: "issue:manage",
-  resolve_issue: "issue:manage",
-  save_form: "form:edit",
-  update_user: "user:manage",
-};
+    }
+  | { kind: "add_part"; payload: Parameters<typeof addPartItem>[0] }
+  | {
+      kind: "confirm_part";
+      payload: {
+        partId: string;
+        status: "in_progress" | "completed" | "blocked";
+        note: string;
+      };
+    }
+  | { kind: "create_test_report"; payload: Parameters<typeof createTestReport>[0] }
+  | { kind: "create_inspection"; payload: Parameters<typeof createInspectionRecord>[0] }
+  | {
+      kind: "assign_member";
+      payload: { projectId: string; userId: string; responsibility: string };
+    }
+  | {
+      kind: "set_project_status";
+      payload: { projectId: string; status: "active" | "paused" | "cancelled"; reason: string };
+    }
+  | {
+      kind: "create_user";
+      payload: Parameters<typeof createNpdUser>[0];
+    }
+  | {
+      kind: "update_user";
+      payload: { userId: string; email: string; name: string; role: NpdRole; department: string; active: boolean };
+    }
+  | { kind: "save_dashboard_preference"; payload: DashboardPreference };
 
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as ActionBody;
-    if (
-      !body?.kind ||
-      !Object.prototype.hasOwnProperty.call(requiredPermission, body.kind) ||
-      !body.payload
-    ) {
+    if (!body?.kind || !body.payload) {
       return NextResponse.json({ error: "不支持的操作。" }, { status: 400 });
     }
-
     const authenticated = await getChatGPTUser();
-    const currentUser = await resolveCurrentUser(
+    const currentUser = await resolveNpdCurrentUser(
       authenticated?.email ?? null,
       authenticated?.fullName ?? null,
     );
-    const permission =
-      body.kind === "save_form" && body.payload.submit
-        ? "form:submit"
-        : requiredPermission[body.kind];
-
-    if (!hasPermission(currentUser.role, permission)) {
-      return NextResponse.json(
-        { error: `当前角色“${currentUser.roleLabel}”无权执行此操作。` },
-        { status: 403 },
-      );
-    }
-
     let result: unknown = null;
     switch (body.kind) {
       case "create_project":
-        result = await createProject(body.payload, currentUser);
-        break;
-      case "update_milestone":
-        result = await updateMilestone(
-          body.payload.milestoneId,
-          body.payload.status,
-          body.payload.progress,
-          body.payload.note,
-          body.payload.plannedDate,
-          currentUser,
-        );
-        break;
-      case "waive_milestone":
-        result = await waiveMilestone(
-          body.payload.milestoneId,
-          body.payload.reason,
-          currentUser,
-        );
-        break;
-      case "set_project_paused":
-        result = await setProjectPaused(
-          body.payload.projectId,
-          body.payload.paused,
-          body.payload.reason,
-          currentUser,
-        );
-        break;
-      case "terminate_project":
-        result = await terminateProject(
-          body.payload.projectId,
-          body.payload.reason,
-          currentUser,
-        );
+        result = await createNpdProject(body.payload, currentUser);
         break;
       case "create_order":
-        result = await createSalesOrder(body.payload, currentUser);
+        result = await createNpdSalesOrder(body.payload, currentUser);
         break;
-      case "set_order_link":
-        result = await setOrderLink(
+      case "link_order":
+        result = await linkNpdSalesOrder(
           body.payload.orderId,
           body.payload.projectId,
           currentUser,
         );
         break;
-      case "decide_approval":
-        result = await decideApproval(
-          body.payload.approvalId,
-          body.payload.decision,
-          body.payload.comment,
-          currentUser,
-        );
+      case "add_motor":
+        result = await addProjectMotor(body.payload.projectId, body.payload.motor, currentUser);
         break;
-      case "create_change":
-        result = await createChangeRequest(body.payload, currentUser);
-        break;
-      case "decide_change":
-        result = await decideChangeRequest(
-          body.payload.changeId,
-          body.payload.decision,
-          body.payload.comment,
-          currentUser,
-        );
-        break;
-      case "verify_change":
-        result = await verifyChangeRequest(
-          body.payload.changeId,
-          body.payload.verification,
-          currentUser,
-        );
-        break;
-      case "create_issue":
-        result = await createIssue(body.payload, currentUser);
-        break;
-      case "resolve_issue":
-        result = await resolveIssue(
-          body.payload.issueId,
-          body.payload.resolution,
+      case "update_motor_requirements":
+        result = await updateMotorRequirements(
+          body.payload.motorId,
+          body.payload.inspectionRequirement,
+          body.payload.testRequirement,
           currentUser,
         );
         break;
       case "save_form":
-        result = await saveFormRecord(
+        result = await saveNpdFormRecord(
           body.payload.projectId,
           body.payload.formCode,
           body.payload.formPayload,
@@ -244,15 +132,70 @@ export async function POST(request: Request) {
           currentUser,
         );
         break;
-      case "update_user":
-        result = await updateUserAccess(body.payload, currentUser);
+      case "update_sheet":
+        result = await updateProjectSheet(
+          body.payload.projectId,
+          body.payload.sheetCode,
+          {
+            status: body.payload.status,
+            progress: body.payload.progress,
+            plannedDate: body.payload.plannedDate,
+            note: body.payload.note,
+          },
+          currentUser,
+        );
         break;
+      case "add_part":
+        result = await addPartItem(body.payload, currentUser);
+        break;
+      case "confirm_part":
+        result = await confirmPartItem(
+          body.payload.partId,
+          body.payload.status,
+          body.payload.note,
+          currentUser,
+        );
+        break;
+      case "create_test_report":
+        result = await createTestReport(body.payload, currentUser);
+        break;
+      case "create_inspection":
+        result = await createInspectionRecord(body.payload, currentUser);
+        break;
+      case "assign_member":
+        result = await assignProjectMember(
+          body.payload.projectId,
+          body.payload.userId,
+          body.payload.responsibility,
+          currentUser,
+        );
+        break;
+      case "set_project_status":
+        result = await setNpdProjectStatus(
+          body.payload.projectId,
+          body.payload.status,
+          body.payload.reason,
+          currentUser,
+        );
+        break;
+      case "create_user":
+        result = await createNpdUser(body.payload, currentUser);
+        break;
+      case "update_user":
+        result = await updateNpdUser(body.payload, currentUser);
+        break;
+      case "save_dashboard_preference":
+        result = await saveDashboardPreference(body.payload, currentUser);
+        break;
+      default: {
+        const exhaustive: never = body;
+        throw new Error(`不支持的操作：${String((exhaustive as { kind?: string }).kind)}`);
+      }
     }
-
     return NextResponse.json({ ok: true, result });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "操作失败，请稍后重试。";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = error instanceof Error ? error.message : "操作失败，请稍后重试。";
+    const status = /无权|只有|只能|停用|未开通|尚未开通/.test(message) ? 403 : 400;
+    return NextResponse.json({ error: message }, { status });
   }
 }

@@ -3,80 +3,70 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 const root = new URL("../", import.meta.url);
+async function source(path) { return readFile(new URL(path, root), "utf8"); }
 
-async function source(path) {
-  return readFile(new URL(path, root), "utf8");
-}
-
-test("production entry renders the NPD application", async () => {
-  const [page, layout, packageJson, hosting] = await Promise.all([
-    source("app/page.tsx"),
-    source("app/layout.tsx"),
-    source("package.json"),
-    source(".openai/hosting.json"),
+test("production entry renders the V2 multi-sheet NPD workspace", async () => {
+  const [page, layout, workspace, hosting] = await Promise.all([
+    source("app/page.tsx"), source("app/layout.tsx"),
+    source("app/components/NpdWorkspace.tsx"), source(".openai/hosting.json"),
   ]);
-
-  assert.match(page, /<NpdApp/);
-  assert.match(page, /getWorkspaceSnapshot/);
-  assert.match(page, /resolveCurrentUser/);
-  assert.doesNotMatch(page, /SkeletonPreview|codex-preview/);
-  assert.match(layout, /恒达新品开发协同系统/);
+  assert.match(page, /<NpdWorkspace/);
+  assert.match(page, /getNpdWorkspaceSnapshot/);
+  assert.match(page, /resolveNpdCurrentUser/);
+  assert.match(layout, /亨达新品开发/);
   assert.match(layout, /lang="zh-CN"/);
-  assert.doesNotMatch(packageJson, /react-loading-skeleton/);
-  assert.deepEqual(JSON.parse(hosting), { d1: "DB", r2: "FILES" });
+  for (const label of ["项目看板", "新品项目", "销售订单", "我的任务", "人员权限", "创建新项目", "新建账户", "当前进度节点"]) {
+    assert.match(workspace, new RegExp(label));
+  }
+  assert.deepEqual(JSON.parse(hosting), {
+    project_id: "appgprj_6a6221a29cd08191b2032670daf76cf2",
+    d1: "DB", r2: "FILES",
+  });
 });
 
-test("workflow, forms, permissions, and persistence stay wired", async () => {
-  const [component, forms, permissions, schema, store] = await Promise.all([
-    source("app/components/NpdApp.tsx"),
-    source("lib/forms.ts"),
-    source("lib/permissions.ts"),
-    source("db/schema.ts"),
-    source("db/store.ts"),
+test("ten controlled forms map into ten phase sheets", async () => {
+  const [forms, sheets, projectUi, dialogs] = await Promise.all([
+    source("lib/forms.ts"), source("lib/sheets-v2.ts"),
+    source("app/components/npd/ProjectWorkspace.tsx"),
+    source("app/components/npd/Dialogs.tsx"),
   ]);
-
-  for (const code of [
-    "HD/JL-SJ-01A1",
-    "HD/JL-SJ-02A1",
-    "HD/JL-SJ-03A1",
-    "HD/JL-SJ-04A1",
-    "HD/JL-SJ-05A1",
-    "HD/JL-SJ-06A1",
-    "HD/JL-SJ-07A1",
-    "HD/JL-SJ-08A1",
-    "HD/JL-SJ-09A1",
-    "HD/JL-SJ-10A1",
-  ]) {
+  for (let index = 1; index <= 10; index++) {
+    const code = `HD/JL-SJ-${String(index).padStart(2, "0")}A1`;
     assert.match(forms, new RegExp(code.replaceAll("/", "\\/")));
   }
-
-  for (const capability of [
-    "order:link",
-    "order:manage",
-    "project:tailor",
-    "approval:decide",
-    "change:approve",
-    "user:manage",
-    "audit:view",
-  ]) {
-    assert.match(permissions, new RegExp(capability));
+  for (const code of ["initiation", "input_output", "development_plan", "design_review", "parts_plan", "verification", "quality_inspection", "customer_trial", "identification", "change_archive"]) {
+    assert.match(sheets, new RegExp(code));
   }
+  assert.match(projectUi, /项目概览/);
+  assert.match(projectUi, /导出本 Sheet/);
+  assert.match(projectUi, /零部件明细与计划节点/);
+  assert.match(projectUi, /规格级试验报告/);
+  assert.match(projectUi, /质量检验记录/);
+  assert.match(dialogs, /设计输出中的检验要求/);
+});
 
-  assert.match(component, /订单关联/);
-  assert.match(component, /录入销售订单/);
-  assert.match(component, /进度与分析/);
-  assert.match(component, /人员与权限/);
-  assert.match(component, /新增项目问题/);
-  assert.match(component, /变更实施与效果验证/);
-  assert.match(component, /确认风险裁剪/);
-  assert.match(component, /终止项目/);
-  assert.match(schema, /salesOrders/);
-  assert.match(schema, /changeRequests/);
-  assert.match(store, /CREATE TABLE IF NOT EXISTS milestones/);
-  assert.match(store, /CREATE TABLE IF NOT EXISTS form_records/);
-  assert.match(store, /export async function setOrderLink/);
-  assert.match(store, /export async function createIssue/);
-  assert.match(store, /export async function verifyChangeRequest/);
-  assert.match(store, /export async function waiveMilestone/);
-  assert.match(store, /export async function terminateProject/);
+test("roles, persistence, timestamps, exports and integrity gates stay wired", async () => {
+  const [access, domain, schema, store, exportSource, actionRoute] = await Promise.all([
+    source("lib/access-v2.ts"), source("lib/npd-v2.ts"), source("db/schema.ts"),
+    source("db/store-v2.ts"), source("lib/export-v2.ts"), source("app/api/action/route.ts"),
+  ]);
+  for (const role of ["admin", "sales", "design", "production", "tester", "quality"]) {
+    assert.match(domain, new RegExp(`"${role}"`));
+  }
+  assert.match(access, /project\.initiatorId === user\.id/);
+  assert.match(access, /project\.ownerId === user\.id/);
+  for (const table of ["npd_projects", "npd_sales_orders", "npd_project_motors", "npd_project_sheets", "npd_part_items", "npd_test_reports", "npd_inspection_records", "npd_activities"]) {
+    assert.match(store, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
+  }
+  assert.match(store, /validateSheetCompletion/);
+  assert.match(store, /前置阶段/);
+  assert.match(store, /质量记录未齐套/);
+  assert.match(store, /CURRENT_TIMESTAMP/);
+  assert.match(exportSource, /mso-application progid="Excel\.Sheet"/);
+  assert.match(exportSource, /完整开发程序档案/);
+  for (const kind of ["create_project", "create_order", "link_order", "add_motor", "create_test_report", "create_inspection", "create_user", "update_user", "save_dashboard_preference"]) {
+    assert.match(actionRoute, new RegExp(kind));
+  }
+  assert.match(schema, /npdInspectionRecords/);
+  assert.match(schema, /npdDashboardPreferences/);
 });

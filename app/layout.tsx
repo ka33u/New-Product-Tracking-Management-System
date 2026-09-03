@@ -1,16 +1,17 @@
 import "./globals.css";
+import "./npd-v2.css";
 
 export const metadata = {
   title: {
-    default: "恒达新品开发协同系统",
-    template: "%s｜恒达新品开发",
+    default: "亨达新品开发",
+    template: "%s｜亨达新品开发",
   },
   description:
-    "从立项、设计、评审、验证到定型、变更和归档的一体化电机新品开发工作台。",
-  applicationName: "恒达新品开发协同系统",
+    "以项目多规格、阶段 Sheet、节点确认、试验和质量记录为主线的电机新品开发全流程监控平台。",
+  applicationName: "亨达新品开发",
   openGraph: {
-    title: "恒达新品开发协同系统",
-    description: "订单驱动、阶段门控制、受控表单与全程追溯的一体化新品开发平台。",
+    title: "亨达新品开发",
+    description: "多规格电机、阶段 Sheet、节点、试验、质量与归档一体化管理。",
     type: "website",
     locale: "zh_CN",
   },
