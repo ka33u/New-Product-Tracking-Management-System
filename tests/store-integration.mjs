@@ -26,7 +26,7 @@ class D1Adapter {
 function transpile(source, fileName) {
   return ts.transpileModule(source, { fileName, compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext, moduleResolution: ts.ModuleResolutionKind.Bundler } }).outputText;
 }
-async function buildStoreModule(database) {
+async function buildStoreModule(database, runtimeEnv = {}) {
   const context = vm.createContext({ console, crypto, Date, Intl, JSON, Math, Object, Promise, Map, Set, String, Number, Boolean, Array, Error, RegExp, process: { env: { NODE_ENV: "development" } } });
   const paths = ["/db/store-v2.ts", "/lib/npd-v2.ts", "/lib/access-v2.ts", "/lib/forms.ts", "/lib/sheets-v2.ts"];
   const modules = new Map();
@@ -34,7 +34,7 @@ async function buildStoreModule(database) {
     const source = await readFile(new URL(`..${path}`, import.meta.url), "utf8");
     modules.set(path, new vm.SourceTextModule(transpile(source, path), { context, identifier: path }));
   }
-  modules.set("cloudflare:workers", new vm.SyntheticModule(["env"], function initialize() { this.setExport("env", { DB: database }); }, { context, identifier: "cloudflare:workers" }));
+  modules.set("cloudflare:workers", new vm.SyntheticModule(["env"], function initialize() { this.setExport("env", { DB: database, ...runtimeEnv }); }, { context, identifier: "cloudflare:workers" }));
   const resolve = (specifier, parent) => {
     if (specifier === "cloudflare:workers") return specifier;
     const resolved = new URL(specifier, new URL(parent, "file:///"));
@@ -162,5 +162,17 @@ assert.equal(archive.motors.length, 2);
 assert.equal(archive.parts.length, 1);
 assert.equal(archive.tests.length, 1);
 assert.equal(archive.inspections.length, 1);
+
+const ownerDatabase = new D1Adapter();
+const ownerStore = await buildStoreModule(ownerDatabase, { NPD_OWNER_EMAIL: "owner@example.com" });
+await ownerStore.ensureNpdDatabase();
+await ownerStore.resolveNpdCurrentUser("first-visitor@example.com", "首个访问者");
+const configuredOwner = await ownerStore.resolveNpdCurrentUser("OWNER@EXAMPLE.COM", "站点所有者");
+assert.equal(configuredOwner.role, "admin");
+assert.equal(configuredOwner.active, true);
+await assert.rejects(
+  () => ownerStore.resolveNpdCurrentUser("not-opened@example.com", "未开通人员"),
+  /账号尚未开通/,
+);
 
 console.log("V2 store integration OK:", `${snapshot.projects.length} projects,`, `${snapshot.motors.length} motors,`, `${snapshot.activities.length} timestamped events`);

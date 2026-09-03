@@ -38,7 +38,11 @@ import {
 } from "../lib/sheets-v2";
 
 type Row = Record<string, string | number | null>;
-type RuntimeEnv = { DB?: D1Database; FILES?: R2Bucket };
+type RuntimeEnv = {
+  DB?: D1Database;
+  FILES?: R2Bucket;
+  NPD_OWNER_EMAIL?: string;
+};
 
 const defaultDashboardPreference: DashboardPreference = {
   periodMode: "year",
@@ -263,7 +267,7 @@ async function repairDemoConsistency(database: D1Database) {
     database.prepare(`UPDATE npd_project_sheets SET status='blocked',progress=0,
       updated_by='npd-u-production',note='电磁制动器热容量数据待供应商确认。',
       updated_at=CURRENT_TIMESTAMP WHERE project_id='npd-p-002' AND code='parts_plan'`),
-    database.prepare(`INSERT INTO npd_activities
+    database.prepare(`INSERT OR IGNORE INTO npd_activities
       (id,project_id,actor_id,action,entity_type,entity_id,detail)
       VALUES (?,NULL,'npd-u-admin','校准演示数据','system_migration',
       'v2-seed-consistency-1','已统一演示项目的阶段状态、明细节点和聚合进度口径。')`).bind(
@@ -300,12 +304,12 @@ async function seedNpdDatabase(database: D1Database) {
 
   const statements: D1PreparedStatement[] = [];
   users.forEach((row) => statements.push(database.prepare(
-    "INSERT INTO npd_users (id,email,name,department,role) VALUES (?,?,?,?,?)",
+    "INSERT OR IGNORE INTO npd_users (id,email,name,department,role) VALUES (?,?,?,?,?)",
   ).bind(...row)));
   customers.forEach((row) => statements.push(database.prepare(
-    "INSERT INTO npd_customers (id,code,name,industry,contact,phone) VALUES (?,?,?,?,?,?)",
+    "INSERT OR IGNORE INTO npd_customers (id,code,name,industry,contact,phone) VALUES (?,?,?,?,?,?)",
   ).bind(...row)));
-  projects.forEach((row) => statements.push(database.prepare(`INSERT INTO npd_projects (
+  projects.forEach((row) => statements.push(database.prepare(`INSERT OR IGNORE INTO npd_projects (
     id,code,name,series_name,category,source,customer_id,initiator_id,owner_id,
     status,risk_level,current_sheet_code,progress,planned_start,planned_end,actual_end,
     priority,description) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(...row)));
@@ -318,7 +322,7 @@ async function seedNpdDatabase(database: D1Database) {
     ["npd-o-004", "SO-2026-0721", "npd-c-004", "npd-p-004", "YE4-112M-4 通用高效电机", 2, 36000, "CNY", addDays(today, -220), addDays(today, -58), "completed", "npd-u-sales"],
     ["npd-o-005", "SO-2026-1185", "npd-c-001", null, "矿用隔爆电机询单转订单", 3, 512000, "CNY", addDays(today, -4), addDays(today, 150), "confirmed", "npd-u-sales"],
   ];
-  await database.batch(orderRows.map((row) => database.prepare(`INSERT INTO npd_sales_orders (
+  await database.batch(orderRows.map((row) => database.prepare(`INSERT OR IGNORE INTO npd_sales_orders (
     id,order_no,customer_id,project_id,product_summary,quantity,amount,currency,
     order_date,delivery_date,status,created_by
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(...row)));
@@ -347,7 +351,7 @@ async function seedMembers(database: D1Database, projects: unknown[][]) {
     ]);
     for (const [userId, responsibility] of unique) {
       statements.push(database.prepare(
-        "INSERT INTO npd_project_members (id,project_id,user_id,responsibility) VALUES (?,?,?,?)",
+        "INSERT OR IGNORE INTO npd_project_members (id,project_id,user_id,responsibility) VALUES (?,?,?,?)",
       ).bind(makeId("mem"), projectId, userId, responsibility));
     }
   }
@@ -364,7 +368,7 @@ async function seedMotors(database: D1Database, today: string) {
     ["npd-m-006", "npd-p-003", "YKK-355M-4", "HD26-3554", "250kW", "6000V", "50Hz", "4", "1490r/min", "355M", "IMB3", 1, "高温绝缘体系、轴承游隙、冷却风路和防护等级", "高温环境温升、绝缘寿命、振动及噪声试验", addDays(today, 58), null, "planned"],
     ["npd-m-007", "npd-p-004", "YE4-112M-4", "HD26-1124", "4kW", "380V", "50Hz", "4", "1440r/min", "112M", "B3", 2, "效率和材料替代专项检验", "效率与温升对比验证", addDays(today, -85), addDays(today, -88), "completed"],
   ];
-  await database.batch(rows.map((row) => database.prepare(`INSERT INTO npd_project_motors (
+  await database.batch(rows.map((row) => database.prepare(`INSERT OR IGNORE INTO npd_project_motors (
     id,project_id,model,motor_code,rated_power,voltage,frequency,poles,speed,frame_size,
     mounting,quantity,inspection_requirement,test_requirement,planned_date,actual_date,status
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(...row)));
@@ -390,7 +394,7 @@ async function seedSheets(database: D1Database, projects: unknown[][]) {
           ? "in_progress"
           : "not_started";
       const plannedDate = interpolateDate(start, end, sheetScheduleRatios[index]);
-      statements.push(database.prepare(`INSERT INTO npd_project_sheets (
+      statements.push(database.prepare(`INSERT OR IGNORE INTO npd_project_sheets (
         id,project_id,code,title,sort_order,owner_role,status,progress,planned_date,
         actual_date,version,note,updated_by
       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
@@ -401,7 +405,7 @@ async function seedSheets(database: D1Database, projects: unknown[][]) {
       ));
       if (status === "completed") {
         sheet.formCodes.forEach((formCode) => {
-          statements.push(database.prepare(`INSERT INTO npd_form_records
+          statements.push(database.prepare(`INSERT OR IGNORE INTO npd_form_records
             (id,project_id,form_code,sheet_code,status,version,payload,updated_by)
             VALUES (?,?,?,?, 'submitted',1,?,?)`).bind(
             makeId("form"), projectId, formCode, sheet.code,
@@ -422,13 +426,13 @@ async function seedDetails(database: D1Database, today: string) {
     ["npd-part-003", "npd-p-001", null, "HE5-FAN", "低损耗风扇", "HE5 通用", "PA66-GF30", 1, "外购", "DO-HE5-COM-04", "外观、尺寸、材料证明", "超速 1.2 倍 2min", addDays(today, 5), null, "planned", null, null],
     ["npd-part-004", "npd-p-002", "npd-m-004", "250M-BRAKE", "电磁制动器", "37kW/6P", "组件", 1, "外购", "DO-YVF2-250-08", "接口尺寸、制动力矩、防护等级", "制动热容量 120 次/小时", addDays(today, 6), null, "blocked", null, null],
   ];
-  await database.batch(parts.map((row) => database.prepare(`INSERT INTO npd_part_items (
+  await database.batch(parts.map((row) => database.prepare(`INSERT OR IGNORE INTO npd_part_items (
     id,project_id,motor_id,part_no,name,specification,material,quantity,source_type,
     design_output_ref,inspection_requirement,test_requirement,planned_date,actual_date,
     status,confirmed_by,confirmed_at
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(...row)));
 
-  await database.prepare(`INSERT INTO npd_test_reports (
+  await database.prepare(`INSERT OR IGNORE INTO npd_test_reports (
     id,project_id,motor_id,report_no,report_type,title,requirement_ref,test_date,
     result,conclusion,document_id,submitted_by
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
@@ -437,7 +441,7 @@ async function seedDetails(database: D1Database, today: string) {
     addDays(today, -12), "合格", "效率、温升和堵转指标满足设计输入。", null,
     "npd-u-tester",
   ).run();
-  await database.prepare(`INSERT INTO npd_inspection_records (
+  await database.prepare(`INSERT OR IGNORE INTO npd_inspection_records (
     id,project_id,motor_id,part_item_id,item_type,inspection_requirement,
     design_output_ref,inspection_date,result,conclusion,document_id,inspector_id
   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
@@ -467,32 +471,46 @@ export async function resolveNpdCurrentUser(
     throw new Error("请先使用 ChatGPT 登录后再访问新品开发系统。");
   }
 
+  const normalizedEmail = email.trim().toLowerCase();
+  const ownerEmail = getNpdRuntimeEnv().NPD_OWNER_EMAIL?.trim().toLowerCase();
+  const isConfiguredOwner = Boolean(ownerEmail && normalizedEmail === ownerEmail);
+
   let row = await database
     .prepare("SELECT * FROM npd_users WHERE lower(email)=lower(?)")
-    .bind(email)
+    .bind(normalizedEmail)
     .first<Row>();
+  if (row && isConfiguredOwner &&
+      (String(row.role) !== "admin" || !Boolean(row.active) || !Boolean(row.bootstrap_admin))) {
+    await database.prepare(`UPDATE npd_users SET role='admin',active=1,bootstrap_admin=1,
+      department=CASE WHEN department='' THEN '系统管理' ELSE department END,
+      updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(String(row.id)).run();
+    row = await database.prepare("SELECT * FROM npd_users WHERE id=?")
+      .bind(String(row.id)).first<Row>();
+  }
   if (!row) {
-    const bootstrap = await database
-      .prepare("SELECT COUNT(*) AS count FROM npd_users WHERE bootstrap_admin=1")
-      .first<{ count: number }>();
-    if (bootstrap?.count) {
-      throw new Error("账号尚未开通，请联系管理员在人员与权限中创建账户。");
+    if (!isConfiguredOwner) {
+      const bootstrap = await database
+        .prepare("SELECT COUNT(*) AS count FROM npd_users WHERE bootstrap_admin=1")
+        .first<{ count: number }>();
+      if (bootstrap?.count) {
+        throw new Error("账号尚未开通，请联系管理员在人员与权限中创建账户。");
+      }
     }
     const role: NpdRole = "admin";
     const id = makeId("user");
-    await database.prepare(`INSERT INTO npd_users
+    await database.prepare(`INSERT OR IGNORE INTO npd_users
       (id,email,name,department,role,active,bootstrap_admin)
       VALUES (?,?,?,?,?,1,?)`).bind(
       id,
-      email,
-      fullName?.trim() || email.split("@")[0],
+      normalizedEmail,
+      fullName?.trim() || normalizedEmail.split("@")[0],
       "系统管理",
       role,
       1,
     ).run();
     row = await database
-      .prepare("SELECT * FROM npd_users WHERE id=?")
-      .bind(id)
+      .prepare("SELECT * FROM npd_users WHERE lower(email)=lower(?)")
+      .bind(normalizedEmail)
       .first<Row>();
   }
   if (!row) throw new Error("用户初始化失败。");
