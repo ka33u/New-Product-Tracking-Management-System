@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
-import { getChatGPTUser } from "../../chatgpt-auth";
-import { getNpdWorkspaceSnapshot, resolveNpdCurrentUser } from "../../../db/store-v2";
+import { requireNpdRequestUser } from "../../request-user";
+import { getNpdWorkspaceSnapshot } from "../../../db/store-v2";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const authenticated = await getChatGPTUser();
-    const currentUser = await resolveNpdCurrentUser(
-      authenticated?.email ?? null,
-      authenticated?.fullName ?? null,
-    );
+    const currentUser = await requireNpdRequestUser();
     return NextResponse.json({
       currentUser,
       snapshot: await getNpdWorkspaceSnapshot(currentUser),

@@ -2,12 +2,14 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 export type ChatGPTUser = {
+  id: string | null;
   displayName: string;
   email: string;
   fullName: string | null;
 };
 
 const USER_EMAIL_HEADER = "oai-authenticated-user-email";
+const USER_ID_HEADER = "oai-authenticated-user-id";
 const USER_FULL_NAME_HEADER = "oai-authenticated-user-full-name";
 const USER_FULL_NAME_ENCODING_HEADER =
   "oai-authenticated-user-full-name-encoding";
@@ -29,6 +31,7 @@ export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
       : null;
 
   return {
+    id: requestHeaders.get(USER_ID_HEADER),
     displayName: fullName ?? email,
     email,
     fullName,

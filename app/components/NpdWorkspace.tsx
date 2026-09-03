@@ -12,7 +12,7 @@ import { EmptyState, Icon, ProgressBar, StatusBadge } from "./npd/ui";
 
 type View = "dashboard" | "projects" | "orders" | "tasks" | "people";
 
-export function NpdWorkspace({ currentUser, initialSnapshot }: { currentUser: NpdUser; initialSnapshot: NpdWorkspaceSnapshot }) {
+export function NpdWorkspace({ currentUser, initialSnapshot, signOutPath }: { currentUser: NpdUser; initialSnapshot: NpdWorkspaceSnapshot; signOutPath: string }) {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [me, setMe] = useState(currentUser);
   const [view, setView] = useState<View>("dashboard");
@@ -65,7 +65,7 @@ export function NpdWorkspace({ currentUser, initialSnapshot }: { currentUser: Np
   if (selectedProject) return <><ProjectWorkspace project={selectedProject} snapshot={snapshot} currentUser={me} onBack={() => setSelectedId(null)} onAction={runAction} onUpload={uploadFile} />{toast && <Toast {...toast} />}</>;
 
   return <div className="npd2-app">
-    <aside className={`npd2-sidebar ${mobileNav ? "open" : ""}`}><div className="npd2-brand"><div className="npd2-brand-symbol"><span>H</span><i /></div><div><b>亨达新品开发</b><small>全流程监控系统</small></div></div><nav><NavButton icon="grid" label="项目看板" active={view === "dashboard"} onClick={() => navigate("dashboard")} /><NavButton icon="folder" label="新品项目" count={snapshot.projects.length} active={view === "projects"} onClick={() => navigate("projects")} /><NavButton icon="link" label="销售订单" count={snapshot.orders.filter((order) => !order.projectId).length} active={view === "orders"} onClick={() => navigate("orders")} /><NavButton icon="task" label="我的任务" count={taskCount(snapshot, me)} active={view === "tasks"} onClick={() => navigate("tasks")} />{me.role === "admin" && <NavButton icon="users" label="人员权限" count={snapshot.users.filter((user) => user.active).length} active={view === "people"} onClick={() => navigate("people")} />}</nav><div className="npd2-sidebar-guide"><span><Icon name="shield" /></span><b>阶段门禁已启用</b><p>前置交付不齐套时，系统会阻止阶段放行和项目完成。</p></div><div className="npd2-sidebar-user"><span>{me.avatar}</span><div><b>{me.name}</b><small>{me.roleLabel} · {me.department}</small></div><i className="online" /></div></aside>
+    <aside className={`npd2-sidebar ${mobileNav ? "open" : ""}`}><div className="npd2-brand"><div className="npd2-brand-symbol"><span>H</span><i /></div><div><b>亨达新品开发</b><small>全流程监控系统</small></div></div><nav><NavButton icon="grid" label="项目看板" active={view === "dashboard"} onClick={() => navigate("dashboard")} /><NavButton icon="folder" label="新品项目" count={snapshot.projects.length} active={view === "projects"} onClick={() => navigate("projects")} /><NavButton icon="link" label="销售订单" count={snapshot.orders.filter((order) => !order.projectId).length} active={view === "orders"} onClick={() => navigate("orders")} /><NavButton icon="task" label="我的任务" count={taskCount(snapshot, me)} active={view === "tasks"} onClick={() => navigate("tasks")} />{me.role === "admin" && <NavButton icon="users" label="人员权限" count={snapshot.users.filter((user) => user.active).length} active={view === "people"} onClick={() => navigate("people")} />}</nav><div className="npd2-sidebar-guide"><span><Icon name="shield" /></span><b>阶段门禁已启用</b><p>前置交付不齐套时，系统会阻止阶段放行和项目完成。</p></div><div className="npd2-sidebar-user"><span>{me.avatar}</span><div><b>{me.name}</b><small>{me.roleLabel} · {me.department}</small></div><a href={signOutPath} title="退出当前账户"><Icon name="exit" />退出</a></div></aside>
     <div className="npd2-main"><header className="npd2-topbar"><button className="npd2-menu-button" onClick={() => setMobileNav((old) => !old)}><Icon name="menu" /></button><div className="npd2-search"><Icon name="search" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索项目、订单、客户或电机型号…" /></div><div className="npd2-top-actions"><span className="npd2-scope"><Icon name="shield" />{me.role === "admin" ? "全局数据范围" : "发起 / 负责 / 参与项目"}</span>{canCreateProject(me.role) && <button className="npd2-button npd2-button-primary" onClick={() => setCreateOpen(true)}><Icon name="plus" />创建新项目</button>}</div></header><main>{view === "dashboard" && <Dashboard snapshot={snapshot} currentUser={me} onOpenProject={setSelectedId} onSavePreference={async (value) => { await runAction("save_dashboard_preference", value); }} />}{view === "projects" && <Projects snapshot={snapshot} query={query} onOpen={setSelectedId} onCreate={() => setCreateOpen(true)} canCreate={canCreateProject(me.role)} />}{view === "orders" && <Orders snapshot={snapshot} currentUser={me} query={query} onCreate={() => setOrderOpen(true)} onLink={setLinkOrder} onOpenProject={setSelectedId} />}{view === "tasks" && <Tasks snapshot={snapshot} currentUser={me} onOpen={setSelectedId} />}{view === "people" && me.role === "admin" && <People users={snapshot.users} query={query} onEdit={setEditUser} onCreate={() => setCreateUserOpen(true)} />}</main></div>
     {createOpen && <CreateProjectDialog snapshot={snapshot} onClose={() => setCreateOpen(false)} onAction={runAction} />}
     {orderOpen && <SalesOrderDialog snapshot={snapshot} onClose={() => setOrderOpen(false)} onAction={runAction} />}
@@ -78,9 +78,11 @@ export function NpdWorkspace({ currentUser, initialSnapshot }: { currentUser: Np
 
 const actionSuccess: Record<string, string> = {
   create_project: "新品项目已创建，10 个阶段 Sheet 已生成。", add_motor: "电机规格已加入项目。",
+  update_motor: "电机规格已生成新设计版次，下游影响已重新复核。",
   create_order: "销售订单已录入台账。", link_order: "订单与新品项目的关联已更新。",
   update_motor_requirements: "设计输出的检验、试验要求已更新。", save_form: "受控表单已保存。",
   update_sheet: "阶段状态已更新。", add_part: "零部件与节点已加入。", confirm_part: "生产节点已确认。",
+  update_part: "零部件已生成新设计版次，原确认记录已保留。",
   create_test_report: "试验报告已提交。", create_inspection: "质量检验记录已提交。",
   assign_member: "项目成员职责已更新。", set_project_status: "项目运行状态已变更。",
   create_user: "登录账户已创建。", update_user: "人员账户与权限已更新。", save_dashboard_preference: "个人看板配置已保存。",

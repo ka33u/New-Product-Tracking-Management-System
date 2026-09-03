@@ -12,7 +12,8 @@ test("production entry renders the V2 multi-sheet NPD workspace", async () => {
   ]);
   assert.match(page, /<NpdWorkspace/);
   assert.match(page, /getNpdWorkspaceSnapshot/);
-  assert.match(page, /resolveNpdCurrentUser/);
+  assert.match(page, /getNpdRequestUser/);
+  assert.match(page, /创建首位管理员/);
   assert.match(layout, /亨达新品开发/);
   assert.match(layout, /lang="zh-CN"/);
   for (const label of ["项目看板", "新品项目", "销售订单", "我的任务", "人员权限", "创建新项目", "新建账户", "当前进度节点"]) {
@@ -42,6 +43,7 @@ test("ten controlled forms map into ten phase sheets", async () => {
   assert.match(projectUi, /零部件明细与计划节点/);
   assert.match(projectUi, /规格级试验报告/);
   assert.match(projectUi, /质量检验记录/);
+  assert.match(projectUi, /版本与修改记录/);
   assert.match(dialogs, /设计输出中的检验要求/);
 });
 
@@ -50,12 +52,12 @@ test("roles, persistence, timestamps, exports and integrity gates stay wired", a
     source("lib/access-v2.ts"), source("lib/npd-v2.ts"), source("db/schema.ts"),
     source("db/store-v2.ts"), source("lib/export-v2.ts"), source("app/api/action/route.ts"),
   ]);
-  for (const role of ["admin", "sales", "design", "production", "tester", "quality"]) {
+  for (const role of ["admin", "sales", "design", "process", "procurement", "production", "tester", "quality"]) {
     assert.match(domain, new RegExp(`"${role}"`));
   }
   assert.match(access, /project\.initiatorId === user\.id/);
   assert.match(access, /project\.ownerId === user\.id/);
-  for (const table of ["npd_projects", "npd_sales_orders", "npd_project_motors", "npd_project_sheets", "npd_part_items", "npd_test_reports", "npd_inspection_records", "npd_activities"]) {
+  for (const table of ["npd_projects", "npd_sales_orders", "npd_project_motors", "npd_project_sheets", "npd_sheet_revisions", "npd_local_sessions", "npd_part_items", "npd_test_reports", "npd_inspection_records", "npd_activities"]) {
     assert.match(store, new RegExp(`CREATE TABLE IF NOT EXISTS ${table}`));
   }
   assert.match(store, /validateSheetCompletion/);
@@ -64,9 +66,10 @@ test("roles, persistence, timestamps, exports and integrity gates stay wired", a
   assert.match(store, /CURRENT_TIMESTAMP/);
   assert.match(exportSource, /mso-application progid="Excel\.Sheet"/);
   assert.match(exportSource, /完整开发程序档案/);
-  for (const kind of ["create_project", "create_order", "link_order", "add_motor", "create_test_report", "create_inspection", "create_user", "update_user", "save_dashboard_preference"]) {
+  for (const kind of ["create_project", "create_order", "link_order", "add_motor", "update_motor", "update_part", "create_test_report", "create_inspection", "create_user", "update_user", "save_dashboard_preference"]) {
     assert.match(actionRoute, new RegExp(kind));
   }
   assert.match(schema, /npdInspectionRecords/);
   assert.match(schema, /npdDashboardPreferences/);
+  assert.match(schema, /npdSheetRevisions/);
 });

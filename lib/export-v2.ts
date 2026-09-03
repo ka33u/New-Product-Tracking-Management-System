@@ -14,6 +14,7 @@ import type {
   ProjectMotor,
   ProjectSheet,
   SheetCode,
+  SheetRevision,
   TestReport,
 } from "./npd-v2";
 import { projectStatusLabels, roleLabels, sheetStatusLabels } from "./npd-v2";
@@ -26,6 +27,7 @@ export interface ProjectArchiveData {
   members: ProjectMember[];
   motors: ProjectMotor[];
   sheets: ProjectSheet[];
+  revisions: SheetRevision[];
   forms: NpdFormRecord[];
   parts: PartItem[];
   tests: TestReport[];
@@ -111,8 +113,8 @@ export function buildProjectExcel(data: ProjectArchiveData) {
       [project.code, project.name, project.seriesName, project.customerName, project.initiatorName, project.ownerName, projectStatusLabels[project.status], project.riskLevel, `${project.progress}%`, project.motorCount, project.plannedStart, project.plannedEnd, project.actualEnd, project.updatedAt],
     ]),
     worksheet("电机规格", [
-      ["型号规格", "电机编码", "功率", "电压", "频率", "极数", "转速", "机座号", "安装方式", "数量", "检验要求", "试验要求", "计划节点", "实际完成", "状态", "更新时间"],
-      ...data.motors.map((motor) => [motor.model, motor.motorCode, motor.ratedPower, motor.voltage, motor.frequency, motor.poles, motor.speed, motor.frameSize, motor.mounting, motor.quantity, motor.inspectionRequirement, motor.testRequirement, motor.plannedDate, motor.actualDate, motor.status, motor.updatedAt]),
+      ["型号规格", "设计版次", "功率", "电压", "频率", "极数", "转速", "机座号", "安装方式", "出线形式", "防护等级", "绝缘等级", "冷却方式", "数量", "检验要求", "试验要求", "计划节点", "实际完成", "状态", "更新时间"],
+      ...data.motors.map((motor) => [motor.model, `R${motor.designRevision}`, motor.ratedPower, motor.voltage, motor.frequency, motor.poles, motor.speed, motor.frameSize, motor.mounting, motor.terminalMode, motor.protectionGrade, motor.insulationClass, motor.coolingMethod, motor.quantity, motor.inspectionRequirement, motor.testRequirement, motor.plannedDate, motor.actualDate, motor.status, motor.updatedAt]),
     ]),
     worksheet("关联销售订单", [
       ["订单号", "客户", "产品概要", "数量", "金额", "币种", "订单日期", "交付日期", "状态", "录入人", "更新时间"],
@@ -124,16 +126,20 @@ export function buildProjectExcel(data: ProjectArchiveData) {
     ]),
     worksheet("受控表单明细", formRows(data)),
     worksheet("零部件节点", [
-      ["关联规格", "零部件编号", "名称", "规格", "材质", "数量", "来源", "设计输出引用", "检验要求", "试验要求", "计划完成", "实际完成", "状态", "生产确认人", "确认时间"],
-      ...data.parts.map((part) => [part.motorModel || "通用", part.partNo, part.name, part.specification, part.material, part.quantity, part.sourceType, part.designOutputRef, part.inspectionRequirement, part.testRequirement, part.plannedDate, part.actualDate, part.status, part.confirmedByName, part.confirmedAt]),
+      ["关联规格", "零部件编号", "名称", "设计版次", "规格", "材质", "数量", "来源", "设计输出引用", "检验要求", "试验要求", "计划完成", "实际完成", "状态", "生产确认人", "确认时间"],
+      ...data.parts.map((part) => [part.motorModel || "通用", part.partNo, part.name, `R${part.designRevision}`, part.specification, part.material, part.quantity, part.sourceType, part.designOutputRef, part.inspectionRequirement, part.testRequirement, part.plannedDate, part.actualDate, part.status, part.confirmedByName, part.confirmedAt]),
     ]),
     worksheet("试验报告", [
-      ["电机规格", "报告编号", "报告类型", "报告名称", "要求引用", "试验日期", "结果", "结论", "附件", "提交人", "提交时间"],
-      ...data.tests.map((report) => [report.motorModel, report.reportNo, report.reportType, report.title, report.requirementRef, report.testDate, report.result, report.conclusion, report.fileName, report.submittedByName, report.createdAt]),
+      ["电机规格", "关联设计版次", "报告编号", "报告类型", "报告名称", "要求引用", "试验日期", "结果", "结论", "附件", "提交人", "提交时间"],
+      ...data.tests.map((report) => [report.motorModel, `R${report.requirementRevision}`, report.reportNo, report.reportType, report.title, report.requirementRef, report.testDate, report.result, report.conclusion, report.fileName, report.submittedByName, report.createdAt]),
     ]),
     worksheet("质量检验", [
-      ["检验对象", "对象类型", "检验要求（设计输出）", "设计输出引用", "检验日期", "结果", "结论", "附件", "检验员", "记录时间"],
-      ...data.inspections.map((record) => [record.itemName, record.itemType === "motor" ? "整机" : "零部件", record.inspectionRequirement, record.designOutputRef, record.inspectionDate, record.result, record.conclusion, record.fileName, record.inspectorName, record.createdAt]),
+      ["检验对象", "对象类型", "关联设计版次", "检验要求（设计输出）", "设计输出引用", "检验日期", "结果", "结论", "附件", "检验员", "记录时间"],
+      ...data.inspections.map((record) => [record.itemName, record.itemType === "motor" ? "整机" : "零部件", `R${record.requirementRevision}`, record.inspectionRequirement, record.designOutputRef, record.inspectionDate, record.result, record.conclusion, record.fileName, record.inspectorName, record.createdAt]),
+    ]),
+    worksheet("阶段版本记录", [
+      ["阶段", "版本", "动作", "摘要", "变更原因", "状态", "进度", "计划日期", "操作人", "时间戳"],
+      ...data.revisions.map((revision) => [sheetByCode[revision.sheetCode].shortTitle, `V${revision.version}`, revision.action, revision.summary, revision.reason, sheetStatusLabels[revision.status], `${revision.progress}%`, revision.plannedDate, revision.actorName, revision.createdAt]),
     ]),
     worksheet("项目成员", [
       ["姓名", "角色", "职责", "加入时间"],
@@ -190,7 +196,8 @@ function archiveSection(data: ProjectArchiveData, sheetCode: SheetCode) {
   if (sheetCode === "verification") special = htmlTable(["规格", "报告编号", "类型", "试验要求", "日期", "结果", "结论", "附件", "提交人/时间"], data.tests.map((item) => [item.motorModel, item.reportNo, item.reportType, item.requirementRef, item.testDate, item.result, item.conclusion, item.fileName, `${item.submittedByName} ${item.createdAt}`]));
   if (sheetCode === "quality_inspection") special = htmlTable(["对象", "类型", "设计输出检验要求", "输出引用", "检验日期", "结果", "结论", "附件", "检验员/时间"], data.inspections.map((item) => [item.itemName, item.itemType === "motor" ? "整机" : "零部件", item.inspectionRequirement, item.designOutputRef, item.inspectionDate, item.result, item.conclusion, item.fileName, `${item.inspectorName} ${item.createdAt}`]));
   const docs = data.documents.filter((document) => document.sheetCode === sheetCode);
-  return `<section><h2>${definition.index}. ${htmlEscape(definition.title)}</h2><p class="meta">责任角色：${htmlEscape(stage?.ownerRoleLabel || roleLabels[definition.ownerRole])}　状态：${htmlEscape(stage ? sheetStatusLabels[stage.status] : "未开始")}　进度：${stage?.progress || 0}%　计划节点：${htmlEscape(stage?.plannedDate || "—")}　版本：V${stage?.version || 1}　最后更新时间：${htmlEscape(stage?.updatedAt || "—")}</p><p>${htmlEscape(definition.subtitle)}</p>${forms}${special}<h3>附件索引</h3>${htmlTable(["文件名", "类别", "版本", "上传人", "时间戳"], docs.map((doc) => [doc.fileName, doc.kind, doc.version, doc.uploadedByName, doc.createdAt]))}</section>`;
+  const revisions = data.revisions.filter((revision) => revision.sheetCode === sheetCode);
+  return `<section><h2>${definition.index}. ${htmlEscape(definition.title)}</h2><p class="meta">责任角色：${htmlEscape(stage?.ownerRoleLabel || roleLabels[definition.ownerRole])}　状态：${htmlEscape(stage ? sheetStatusLabels[stage.status] : "未开始")}　进度：${stage?.progress || 0}%　计划节点：${htmlEscape(stage?.plannedDate || "—")}　版本：V${stage?.version || 1}　最后更新时间：${htmlEscape(stage?.updatedAt || "—")}</p><p>${htmlEscape(definition.subtitle)}</p>${forms}${special}<h3>版本与修改记录</h3>${htmlTable(["版本", "动作", "摘要", "变更原因", "状态", "操作人", "时间戳"], revisions.map((revision) => [`V${revision.version}`, revision.action, revision.summary, revision.reason, sheetStatusLabels[revision.status], revision.actorName, revision.createdAt]))}<h3>附件索引</h3>${htmlTable(["文件名", "类别", "版本", "上传人", "时间戳"], docs.map((doc) => [doc.fileName, doc.kind, doc.version, doc.uploadedByName, doc.createdAt]))}</section>`;
 }
 
 export function buildProjectArchiveHtml(data: ProjectArchiveData, onlySheet?: SheetCode) {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { requireNpdRequestUser } from "../../request-user";
 import {
   addPartItem,
   addProjectMotor,
@@ -11,11 +11,12 @@ import {
   createNpdUser,
   createTestReport,
   linkNpdSalesOrder,
-  resolveNpdCurrentUser,
   saveDashboardPreference,
   saveNpdFormRecord,
   setNpdProjectStatus,
   updateMotorRequirements,
+  updatePartItem,
+  updateProjectMotor,
   updateNpdUser,
   updateProjectSheet,
 } from "../../../db/store-v2";
@@ -33,6 +34,7 @@ type ActionBody =
   | { kind: "create_order"; payload: Parameters<typeof createNpdSalesOrder>[0] }
   | { kind: "link_order"; payload: { orderId: string; projectId: string | null } }
   | { kind: "add_motor"; payload: { projectId: string; motor: Parameters<typeof addProjectMotor>[1] } }
+  | { kind: "update_motor"; payload: { motorId: string; motor: Parameters<typeof updateProjectMotor>[1] } }
   | {
       kind: "update_motor_requirements";
       payload: { motorId: string; inspectionRequirement: string; testRequirement: string };
@@ -44,6 +46,7 @@ type ActionBody =
         formCode: string;
         formPayload: Record<string, unknown>;
         submit: boolean;
+        changeReason: string;
       };
     }
   | {
@@ -55,9 +58,11 @@ type ActionBody =
         progress: number;
         plannedDate: string;
         note: string;
+        changeReason: string;
       };
     }
   | { kind: "add_part"; payload: Parameters<typeof addPartItem>[0] }
+  | { kind: "update_part"; payload: { partId: string; part: Parameters<typeof updatePartItem>[1] } }
   | {
       kind: "confirm_part";
       payload: {
@@ -82,7 +87,7 @@ type ActionBody =
     }
   | {
       kind: "update_user";
-      payload: { userId: string; email: string; name: string; role: NpdRole; department: string; active: boolean };
+      payload: { userId: string; email: string; name: string; role: NpdRole; department: string; active: boolean; password?: string };
     }
   | { kind: "save_dashboard_preference"; payload: DashboardPreference };
 
@@ -92,11 +97,7 @@ export async function POST(request: Request) {
     if (!body?.kind || !body.payload) {
       return NextResponse.json({ error: "不支持的操作。" }, { status: 400 });
     }
-    const authenticated = await getChatGPTUser();
-    const currentUser = await resolveNpdCurrentUser(
-      authenticated?.email ?? null,
-      authenticated?.fullName ?? null,
-    );
+    const currentUser = await requireNpdRequestUser();
     let result: unknown = null;
     switch (body.kind) {
       case "create_project":
@@ -115,6 +116,9 @@ export async function POST(request: Request) {
       case "add_motor":
         result = await addProjectMotor(body.payload.projectId, body.payload.motor, currentUser);
         break;
+      case "update_motor":
+        result = await updateProjectMotor(body.payload.motorId, body.payload.motor, currentUser);
+        break;
       case "update_motor_requirements":
         result = await updateMotorRequirements(
           body.payload.motorId,
@@ -130,6 +134,7 @@ export async function POST(request: Request) {
           body.payload.formPayload,
           body.payload.submit,
           currentUser,
+          body.payload.changeReason,
         );
         break;
       case "update_sheet":
@@ -141,12 +146,16 @@ export async function POST(request: Request) {
             progress: body.payload.progress,
             plannedDate: body.payload.plannedDate,
             note: body.payload.note,
+            changeReason: body.payload.changeReason,
           },
           currentUser,
         );
         break;
       case "add_part":
         result = await addPartItem(body.payload, currentUser);
+        break;
+      case "update_part":
+        result = await updatePartItem(body.payload.partId, body.payload.part, currentUser);
         break;
       case "confirm_part":
         result = await confirmPartItem(

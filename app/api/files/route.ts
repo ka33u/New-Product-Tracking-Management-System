@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { requireNpdRequestUser } from "../../request-user";
 import {
   getNpdRuntimeEnv,
   insertNpdDocument,
-  resolveNpdCurrentUser,
 } from "../../../db/store-v2";
 import type { SheetCode } from "../../../lib/npd-v2";
 import { sheetByCode } from "../../../lib/sheets-v2";
@@ -13,11 +12,7 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   let objectKey = "";
   try {
-    const authenticated = await getChatGPTUser();
-    const currentUser = await resolveNpdCurrentUser(
-      authenticated?.email ?? null,
-      authenticated?.fullName ?? null,
-    );
+    const currentUser = await requireNpdRequestUser();
     const formData = await request.formData();
     const file = formData.get("file");
     const projectId = String(formData.get("projectId") || "").trim();

@@ -35,6 +35,14 @@ const permissions: Record<NpdRole, NpdPermission[]> = {
     "parts:edit", "sheet:edit", "sheet:complete", "file:upload",
     "dashboard:configure", "export:data",
   ],
+  process: [
+    "parts:edit", "sheet:edit", "sheet:complete", "file:upload",
+    "dashboard:configure", "export:data",
+  ],
+  procurement: [
+    "parts:edit", "sheet:edit", "file:upload", "dashboard:configure",
+    "export:data",
+  ],
   production: [
     "parts:edit", "parts:confirm", "sheet:edit", "sheet:complete",
     "file:upload", "dashboard:configure", "export:data",
@@ -97,6 +105,18 @@ export function canEditSheet(
   if (
     user.role === "design" &&
     ["input_output", "development_plan", "design_review", "parts_plan", "identification", "change_archive"].includes(sheetCode)
+  ) {
+    return true;
+  }
+  if (
+    user.role === "process" &&
+    ["development_plan", "design_review", "parts_plan", "identification", "change_archive"].includes(sheetCode)
+  ) {
+    return true;
+  }
+  if (
+    user.role === "procurement" &&
+    ["parts_plan", "change_archive"].includes(sheetCode)
   ) {
     return true;
   }

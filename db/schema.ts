@@ -240,6 +240,7 @@ export const activities = sqliteTable("activities", {
 // V2 全流程架构使用 npd_ 前缀，与首版数据表并存，避免重构时破坏旧数据。
 export const npdUsers = sqliteTable("npd_users", {
   id: text("id").primaryKey(),
+  authUserId: text("auth_user_id").unique(),
   email: text("email").notNull().unique(),
   name: text("name").notNull(),
   department: text("department").notNull(),
@@ -248,8 +249,21 @@ export const npdUsers = sqliteTable("npd_users", {
   bootstrapAdmin: integer("bootstrap_admin", { mode: "boolean" })
     .notNull()
     .default(false),
+  passwordSalt: text("password_salt"),
+  passwordHash: text("password_hash"),
+  lastLoginAt: text("last_login_at"),
   ...timestamps,
 });
+
+export const npdLocalSessions = sqliteTable("npd_local_sessions", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => npdUsers.id),
+  tokenHash: text("token_hash").notNull().unique(),
+  expiresAt: text("expires_at").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  index("idx_npd_local_sessions_user").on(table.userId, table.expiresAt),
+]);
 
 export const npdCustomers = sqliteTable("npd_customers", {
   id: text("id").primaryKey(),
@@ -345,7 +359,12 @@ export const npdProjectMotors = sqliteTable("npd_project_motors", {
   speed: text("speed").notNull().default(""),
   frameSize: text("frame_size").notNull().default(""),
   mounting: text("mounting").notNull().default(""),
+  terminalMode: text("terminal_mode").notNull().default(""),
+  protectionGrade: text("protection_grade").notNull().default(""),
+  insulationClass: text("insulation_class").notNull().default(""),
+  coolingMethod: text("cooling_method").notNull().default(""),
   quantity: integer("quantity").notNull().default(1),
+  designRevision: integer("design_revision").notNull().default(1),
   inspectionRequirement: text("inspection_requirement").notNull().default(""),
   testRequirement: text("test_requirement").notNull().default(""),
   plannedDate: text("planned_date").notNull(),
@@ -417,6 +436,7 @@ export const npdPartItems = sqliteTable("npd_part_items", {
   status: text("status").notNull().default("planned"),
   confirmedBy: text("confirmed_by").references(() => npdUsers.id),
   confirmedAt: text("confirmed_at"),
+  designRevision: integer("design_revision").notNull().default(1),
   ...timestamps,
 }, (table) => [
   uniqueIndex("idx_npd_parts_project_no_motor").on(
@@ -464,6 +484,7 @@ export const npdTestReports = sqliteTable("npd_test_reports", {
   result: text("result").notNull(),
   conclusion: text("conclusion").notNull().default(""),
   documentId: text("document_id").references(() => npdDocuments.id),
+  requirementRevision: integer("requirement_revision").notNull().default(1),
   submittedBy: text("submitted_by")
     .notNull()
     .references(() => npdUsers.id),
@@ -487,6 +508,7 @@ export const npdInspectionRecords = sqliteTable("npd_inspection_records", {
   result: text("result").notNull(),
   conclusion: text("conclusion").notNull().default(""),
   documentId: text("document_id").references(() => npdDocuments.id),
+  requirementRevision: integer("requirement_revision").notNull().default(1),
   inspectorId: text("inspector_id")
     .notNull()
     .references(() => npdUsers.id),
@@ -494,6 +516,37 @@ export const npdInspectionRecords = sqliteTable("npd_inspection_records", {
 }, (table) => [
   index("idx_npd_inspections_project_date").on(table.projectId, table.inspectionDate),
   index("idx_npd_inspections_motor_part").on(table.motorId, table.partItemId),
+]);
+
+export const npdSheetRevisions = sqliteTable("npd_sheet_revisions", {
+  id: text("id").primaryKey(),
+  projectId: text("project_id")
+    .notNull()
+    .references(() => npdProjects.id),
+  sheetCode: text("sheet_code").notNull(),
+  version: integer("version").notNull(),
+  action: text("action").notNull(),
+  summary: text("summary").notNull(),
+  reason: text("reason").notNull().default(""),
+  status: text("status").notNull(),
+  progress: integer("progress").notNull().default(0),
+  plannedDate: text("planned_date").notNull(),
+  actorId: text("actor_id")
+    .notNull()
+    .references(() => npdUsers.id),
+  snapshot: text("snapshot").notNull().default("{}"),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  uniqueIndex("idx_npd_sheet_revisions_version").on(
+    table.projectId,
+    table.sheetCode,
+    table.version,
+  ),
+  index("idx_npd_sheet_revisions_timeline").on(
+    table.projectId,
+    table.sheetCode,
+    table.createdAt,
+  ),
 ]);
 
 export const npdActivities = sqliteTable("npd_activities", {

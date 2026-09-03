@@ -1,9 +1,8 @@
 import { NextResponse } from "next/server";
-import { getChatGPTUser } from "../../../chatgpt-auth";
+import { requireNpdRequestUser } from "../../../request-user";
 import {
   getNpdDocument,
   getNpdRuntimeEnv,
-  resolveNpdCurrentUser,
 } from "../../../../db/store-v2";
 
 export const dynamic = "force-dynamic";
@@ -13,11 +12,7 @@ export async function GET(
   context: { params: Promise<{ id: string }> },
 ) {
   try {
-    const authenticated = await getChatGPTUser();
-    const currentUser = await resolveNpdCurrentUser(
-      authenticated?.email ?? null,
-      authenticated?.fullName ?? null,
-    );
+    const currentUser = await requireNpdRequestUser();
     const { id } = await context.params;
     const record = await getNpdDocument(id, currentUser);
     if (!record) {

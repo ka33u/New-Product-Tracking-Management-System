@@ -18,6 +18,7 @@ import type {
   ProjectStatus,
   RiskLevel,
   SheetCode,
+  SheetRevision,
   SheetStatus,
   TestReport,
 } from "../lib/npd-v2";
@@ -89,11 +90,17 @@ async function initializeNpdDatabase() {
   const database = getDatabase();
   const schemaStatements = [
     `CREATE TABLE IF NOT EXISTS npd_users (
-      id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+      id TEXT PRIMARY KEY, auth_user_id TEXT UNIQUE, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
       department TEXT NOT NULL, role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1,
       bootstrap_admin INTEGER NOT NULL DEFAULT 0,
+      password_salt TEXT, password_hash TEXT, last_login_at TEXT,
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS npd_local_sessions (
+      id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES npd_users(id),
+      token_hash TEXT NOT NULL UNIQUE,expires_at TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS npd_customers (
       id TEXT PRIMARY KEY, code TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
@@ -136,7 +143,10 @@ async function initializeNpdDatabase() {
       model TEXT NOT NULL, motor_code TEXT NOT NULL DEFAULT '', rated_power TEXT NOT NULL DEFAULT '',
       voltage TEXT NOT NULL DEFAULT '', frequency TEXT NOT NULL DEFAULT '50Hz',
       poles TEXT NOT NULL DEFAULT '', speed TEXT NOT NULL DEFAULT '', frame_size TEXT NOT NULL DEFAULT '',
-      mounting TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 1,
+      mounting TEXT NOT NULL DEFAULT '', terminal_mode TEXT NOT NULL DEFAULT '',
+      protection_grade TEXT NOT NULL DEFAULT '', insulation_class TEXT NOT NULL DEFAULT '',
+      cooling_method TEXT NOT NULL DEFAULT '', quantity INTEGER NOT NULL DEFAULT 1,
+      design_revision INTEGER NOT NULL DEFAULT 1,
       inspection_requirement TEXT NOT NULL DEFAULT '', test_requirement TEXT NOT NULL DEFAULT '',
       planned_date TEXT NOT NULL, actual_date TEXT, status TEXT NOT NULL DEFAULT 'planned',
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -168,7 +178,8 @@ async function initializeNpdDatabase() {
       design_output_ref TEXT NOT NULL DEFAULT '', inspection_requirement TEXT NOT NULL DEFAULT '',
       test_requirement TEXT NOT NULL DEFAULT '', planned_date TEXT NOT NULL, actual_date TEXT,
       status TEXT NOT NULL DEFAULT 'planned', confirmed_by TEXT REFERENCES npd_users(id),
-      confirmed_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      confirmed_at TEXT, design_revision INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS npd_documents (
@@ -186,6 +197,7 @@ async function initializeNpdDatabase() {
       report_type TEXT NOT NULL, title TEXT NOT NULL, requirement_ref TEXT NOT NULL DEFAULT '',
       test_date TEXT NOT NULL, result TEXT NOT NULL, conclusion TEXT NOT NULL DEFAULT '',
       document_id TEXT REFERENCES npd_documents(id),
+      requirement_revision INTEGER NOT NULL DEFAULT 1,
       submitted_by TEXT NOT NULL REFERENCES npd_users(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -197,9 +209,18 @@ async function initializeNpdDatabase() {
       design_output_ref TEXT NOT NULL DEFAULT '', inspection_date TEXT NOT NULL,
       result TEXT NOT NULL, conclusion TEXT NOT NULL DEFAULT '',
       document_id TEXT REFERENCES npd_documents(id),
+      requirement_revision INTEGER NOT NULL DEFAULT 1,
       inspector_id TEXT NOT NULL REFERENCES npd_users(id),
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE TABLE IF NOT EXISTS npd_sheet_revisions (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES npd_projects(id),
+      sheet_code TEXT NOT NULL, version INTEGER NOT NULL, action TEXT NOT NULL,
+      summary TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', status TEXT NOT NULL,
+      progress INTEGER NOT NULL DEFAULT 0, planned_date TEXT NOT NULL,
+      actor_id TEXT NOT NULL REFERENCES npd_users(id), snapshot TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
     `CREATE TABLE IF NOT EXISTS npd_activities (
       id TEXT PRIMARY KEY, project_id TEXT REFERENCES npd_projects(id),
@@ -213,6 +234,7 @@ async function initializeNpdDatabase() {
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )`,
     "CREATE INDEX IF NOT EXISTS idx_npd_projects_status ON npd_projects(status)",
+    "CREATE INDEX IF NOT EXISTS idx_npd_local_sessions_user ON npd_local_sessions(user_id, expires_at)",
     "CREATE INDEX IF NOT EXISTS idx_npd_projects_owner ON npd_projects(owner_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_npd_projects_initiator ON npd_projects(initiator_id, status)",
     "CREATE INDEX IF NOT EXISTS idx_npd_orders_project ON npd_sales_orders(project_id, status)",
@@ -236,6 +258,8 @@ async function initializeNpdDatabase() {
     "CREATE INDEX IF NOT EXISTS idx_npd_inspections_motor_part ON npd_inspection_records(motor_id, part_item_id)",
     "CREATE INDEX IF NOT EXISTS idx_npd_activities_project_time ON npd_activities(project_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_npd_activities_actor_time ON npd_activities(actor_id, created_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_npd_sheet_revisions_version ON npd_sheet_revisions(project_id, sheet_code, version)",
+    "CREATE INDEX IF NOT EXISTS idx_npd_sheet_revisions_timeline ON npd_sheet_revisions(project_id, sheet_code, created_at)",
   ];
 
   await database.batch(schemaStatements.map((sql) => database.prepare(sql)));
@@ -243,8 +267,49 @@ async function initializeNpdDatabase() {
     .prepare("SELECT COUNT(*) AS count FROM npd_projects")
     .first<{ count: number }>();
   if (!count?.count) await seedNpdDatabase(database);
+  await repairRoleAndRevisionCoverage(database);
   await repairDemoConsistency(database);
   await database.prepare("PRAGMA optimize").run();
+}
+
+async function repairRoleAndRevisionCoverage(database: D1Database) {
+  await database.batch([
+    database.prepare(`INSERT OR IGNORE INTO npd_users
+      (id,email,name,department,role,active,bootstrap_admin)
+      VALUES ('npd-u-process','process@hengda-motor.local','张伟','技术部·工艺科','process',1,0)`),
+    database.prepare(`INSERT OR IGNORE INTO npd_users
+      (id,email,name,department,role,active,bootstrap_admin)
+      VALUES ('npd-u-procurement','procurement@hengda-motor.local','孙悦','采购部','procurement',1,0)`),
+    database.prepare(`UPDATE npd_project_motors SET
+      terminal_mode=CASE WHEN trim(terminal_mode)='' THEN '接线盒顶部出线' ELSE terminal_mode END,
+      protection_grade=CASE WHEN trim(protection_grade)='' THEN 'IP55' ELSE protection_grade END,
+      insulation_class=CASE WHEN trim(insulation_class)='' THEN 'F级' ELSE insulation_class END,
+      cooling_method=CASE WHEN trim(cooling_method)='' THEN 'IC411' ELSE cooling_method END`),
+  ]);
+  const projects = await database.prepare("SELECT id FROM npd_projects").all<Row>();
+  const statements: D1PreparedStatement[] = [];
+  for (const project of projects.results) {
+    for (const [userId, responsibility] of [
+      ["npd-u-process", "工艺方案、工装及可制造性确认"],
+      ["npd-u-procurement", "外购外协件询价、供应商与到料节点"],
+    ]) {
+      statements.push(database.prepare(`INSERT OR IGNORE INTO npd_project_members
+        (id,project_id,user_id,responsibility) VALUES (?,?,?,?)`).bind(
+        makeId("member"), String(project.id), userId, responsibility,
+      ));
+    }
+  }
+  statements.push(database.prepare(`INSERT OR IGNORE INTO npd_sheet_revisions (
+    id,project_id,sheet_code,version,action,summary,reason,status,progress,
+    planned_date,actor_id,snapshot,created_at
+  ) SELECT 'revision-' || lower(hex(randomblob(12))),s.project_id,s.code,s.version,
+    '历史版本基线','升级版本管理时保留的当前阶段基线','系统升级',s.status,
+    s.progress,s.planned_date,s.updated_by,
+    json_object('source','upgrade_baseline','note',s.note),s.updated_at
+    FROM npd_project_sheets s
+    WHERE NOT EXISTS (SELECT 1 FROM npd_sheet_revisions r
+      WHERE r.project_id=s.project_id AND r.sheet_code=s.code AND r.version=s.version)`));
+  if (statements.length) await database.batch(statements);
 }
 
 async function repairDemoConsistency(database: D1Database) {
@@ -285,6 +350,8 @@ async function seedNpdDatabase(database: D1Database) {
     ["npd-u-admin", "admin@hengda-motor.local", "谢鹏程", "信息化办公室", "admin"],
     ["npd-u-sales", "sales@hengda-motor.local", "徐杰", "销售部", "sales"],
     ["npd-u-design", "design@hengda-motor.local", "王琳", "技术部·设计科", "design"],
+    ["npd-u-process", "process@hengda-motor.local", "张伟", "技术部·工艺科", "process"],
+    ["npd-u-procurement", "procurement@hengda-motor.local", "孙悦", "采购部", "procurement"],
     ["npd-u-production", "production@hengda-motor.local", "吴军", "生产部", "production"],
     ["npd-u-tester", "tester@hengda-motor.local", "赵敏", "试验中心", "tester"],
     ["npd-u-quality", "quality@hengda-motor.local", "周宁", "质量部", "quality"],
@@ -336,6 +403,8 @@ async function seedNpdDatabase(database: D1Database) {
 async function seedMembers(database: D1Database, projects: unknown[][]) {
   const statements: D1PreparedStatement[] = [];
   const support: Array<[string, string]> = [
+    ["npd-u-process", "工艺方案、工装及可制造性确认"],
+    ["npd-u-procurement", "外购外协件询价、供应商与到料节点"],
     ["npd-u-production", "整机及零部件节点确认"],
     ["npd-u-tester", "型式试验与验证报告"],
     ["npd-u-quality", "零部件及整机质量检验"],
@@ -360,18 +429,19 @@ async function seedMembers(database: D1Database, projects: unknown[][]) {
 
 async function seedMotors(database: D1Database, today: string) {
   const rows = [
-    ["npd-m-001", "npd-p-001", "HE5-132S-4", "HD26-1324", "5.5kW", "380V", "50Hz", "4", "1450r/min", "132S", "B3", 2, "效率、温升、噪声、振动及装配尺寸全检", "型式试验：效率、温升、堵转、最大转矩、超速", addDays(today, -10), addDays(today, -11), "completed"],
-    ["npd-m-002", "npd-p-001", "HE5-160M-4", "HD26-1604", "11kW", "380V", "50Hz", "4", "1465r/min", "160M", "B3", 2, "效率、温升、噪声、振动及装配尺寸全检", "型式试验：效率、温升、堵转、最大转矩、超速", addDays(today, 4), null, "in_progress"],
-    ["npd-m-003", "npd-p-001", "HE5-180M-4", "HD26-1804", "18.5kW", "380V", "50Hz", "4", "1470r/min", "180M", "B3", 1, "效率、温升、噪声、振动及装配尺寸全检", "型式试验：效率、温升、堵转、最大转矩、超速", addDays(today, 12), null, "planned"],
-    ["npd-m-004", "npd-p-002", "YVF2-250M-6", "HD26-2506", "37kW", "380V", "50Hz", "6", "985r/min", "250M", "B3", 1, "制动器接口、盐雾防护、轴伸尺寸和动平衡", "低频转矩、频繁制动热容量、盐雾与振动试验", addDays(today, 18), null, "in_progress"],
-    ["npd-m-005", "npd-p-002", "YVF2-280S-6", "HD26-2806", "45kW", "380V", "50Hz", "6", "990r/min", "280S", "B3", 1, "制动器接口、盐雾防护、轴伸尺寸和动平衡", "低频转矩、频繁制动热容量、盐雾与振动试验", addDays(today, 28), null, "planned"],
-    ["npd-m-006", "npd-p-003", "YKK-355M-4", "HD26-3554", "250kW", "6000V", "50Hz", "4", "1490r/min", "355M", "IMB3", 1, "高温绝缘体系、轴承游隙、冷却风路和防护等级", "高温环境温升、绝缘寿命、振动及噪声试验", addDays(today, 58), null, "planned"],
-    ["npd-m-007", "npd-p-004", "YE4-112M-4", "HD26-1124", "4kW", "380V", "50Hz", "4", "1440r/min", "112M", "B3", 2, "效率和材料替代专项检验", "效率与温升对比验证", addDays(today, -85), addDays(today, -88), "completed"],
+    ["npd-m-001", "npd-p-001", "HE5-132S-4", "", "5.5kW", "380V", "50Hz", "4", "1450r/min", "132S", "B3", "接线盒顶部出线", "IP55", "F级", "IC411", 2, "效率、温升、噪声、振动及装配尺寸全检", "型式试验：效率、温升、堵转、最大转矩、超速", addDays(today, -10), addDays(today, -11), "completed"],
+    ["npd-m-002", "npd-p-001", "HE5-160M-4", "", "11kW", "380V", "50Hz", "4", "1465r/min", "160M", "B3", "接线盒顶部出线", "IP55", "F级", "IC411", 2, "效率、温升、噪声、振动及装配尺寸全检", "型式试验：效率、温升、堵转、最大转矩、超速", addDays(today, 4), null, "in_progress"],
+    ["npd-m-003", "npd-p-001", "HE5-180M-4", "", "18.5kW", "380V", "50Hz", "4", "1470r/min", "180M", "B3", "接线盒顶部出线", "IP55", "F级", "IC411", 1, "效率、温升、噪声、振动及装配尺寸全检", "型式试验：效率、温升、堵转、最大转矩、超速", addDays(today, 12), null, "planned"],
+    ["npd-m-004", "npd-p-002", "YVF2-250M-6", "", "37kW", "380V", "50Hz", "6", "985r/min", "250M", "B3", "接线盒右侧出线", "IP56", "F级", "IC416", 1, "制动器接口、盐雾防护、轴伸尺寸和动平衡", "低频转矩、频繁制动热容量、盐雾与振动试验", addDays(today, 18), null, "in_progress"],
+    ["npd-m-005", "npd-p-002", "YVF2-280S-6", "", "45kW", "380V", "50Hz", "6", "990r/min", "280S", "B3", "接线盒右侧出线", "IP56", "F级", "IC416", 1, "制动器接口、盐雾防护、轴伸尺寸和动平衡", "低频转矩、频繁制动热容量、盐雾与振动试验", addDays(today, 28), null, "planned"],
+    ["npd-m-006", "npd-p-003", "YKK-355M-4", "", "250kW", "6000V", "50Hz", "4", "1490r/min", "355M", "IMB3", "接线盒右侧出线", "IP54", "F级", "IC611", 1, "高温绝缘体系、轴承游隙、冷却风路和防护等级", "高温环境温升、绝缘寿命、振动及噪声试验", addDays(today, 58), null, "planned"],
+    ["npd-m-007", "npd-p-004", "YE4-112M-4", "", "4kW", "380V", "50Hz", "4", "1440r/min", "112M", "B3", "接线盒顶部出线", "IP55", "F级", "IC411", 2, "效率和材料替代专项检验", "效率与温升对比验证", addDays(today, -85), addDays(today, -88), "completed"],
   ];
   await database.batch(rows.map((row) => database.prepare(`INSERT OR IGNORE INTO npd_project_motors (
     id,project_id,model,motor_code,rated_power,voltage,frequency,poles,speed,frame_size,
-    mounting,quantity,inspection_requirement,test_requirement,planned_date,actual_date,status
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(...row)));
+    mounting,terminal_mode,protection_grade,insulation_class,cooling_method,quantity,
+    inspection_requirement,test_requirement,planned_date,actual_date,status
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(...row)));
 }
 
 async function seedSheets(database: D1Database, projects: unknown[][]) {
@@ -402,6 +472,14 @@ async function seedSheets(database: D1Database, projects: unknown[][]) {
         sheet.ownerRole, status, status === "completed" ? 100 : status === "in_progress" ? Number(project[12]) % 80 + 15 : 0,
         plannedDate, status === "completed" ? addDays(plannedDate, -1) : null,
         1, status === "in_progress" ? "当前阶段正在按计划推进。" : "", "npd-u-design",
+      ));
+      statements.push(database.prepare(`INSERT OR IGNORE INTO npd_sheet_revisions (
+        id,project_id,sheet_code,version,action,summary,reason,status,progress,
+        planned_date,actor_id,snapshot
+      ) VALUES (?,?,?,1,'初始化阶段','演示项目初始化','系统初始化',?,?,?,?,?)`).bind(
+        makeId("revision"), projectId, sheet.code, status,
+        status === "completed" ? 100 : status === "in_progress" ? Number(project[12]) % 80 + 15 : 0,
+        plannedDate, "npd-u-design", JSON.stringify({ source: "seed" }),
       ));
       if (status === "completed") {
         sheet.formCodes.forEach((formCode) => {
@@ -457,6 +535,7 @@ async function seedDetails(database: D1Database, today: string) {
 export async function resolveNpdCurrentUser(
   email: string | null,
   fullName: string | null,
+  authUserId: string | null = null,
 ): Promise<NpdUser> {
   await ensureNpdDatabase();
   const database = getDatabase();
@@ -475,9 +554,11 @@ export async function resolveNpdCurrentUser(
   const ownerEmail = getNpdRuntimeEnv().NPD_OWNER_EMAIL?.trim().toLowerCase();
   const isConfiguredOwner = Boolean(ownerEmail && normalizedEmail === ownerEmail);
 
+  const normalizedAuthUserId = authUserId?.trim() || null;
   let row = await database
-    .prepare("SELECT * FROM npd_users WHERE lower(email)=lower(?)")
-    .bind(normalizedEmail)
+    .prepare(`SELECT * FROM npd_users WHERE
+      (? IS NOT NULL AND auth_user_id=?) OR lower(email)=lower(?)`)
+    .bind(normalizedAuthUserId, normalizedAuthUserId, normalizedEmail)
     .first<Row>();
   if (row && isConfiguredOwner &&
       (String(row.role) !== "admin" || !Boolean(row.active) || !Boolean(row.bootstrap_admin))) {
@@ -499,9 +580,10 @@ export async function resolveNpdCurrentUser(
     const role: NpdRole = "admin";
     const id = makeId("user");
     await database.prepare(`INSERT OR IGNORE INTO npd_users
-      (id,email,name,department,role,active,bootstrap_admin)
-      VALUES (?,?,?,?,?,1,?)`).bind(
+      (id,auth_user_id,email,name,department,role,active,bootstrap_admin)
+      VALUES (?,?,?,?,?,?,1,?)`).bind(
       id,
+      normalizedAuthUserId,
       normalizedEmail,
       fullName?.trim() || normalizedEmail.split("@")[0],
       "系统管理",
@@ -514,8 +596,124 @@ export async function resolveNpdCurrentUser(
       .first<Row>();
   }
   if (!row) throw new Error("用户初始化失败。");
+  if (normalizedAuthUserId && !row.auth_user_id) {
+    await database.prepare(`UPDATE npd_users SET auth_user_id=?,updated_at=CURRENT_TIMESTAMP
+      WHERE id=? AND auth_user_id IS NULL`).bind(normalizedAuthUserId, String(row.id)).run();
+    row = await database.prepare("SELECT * FROM npd_users WHERE id=?")
+      .bind(String(row.id)).first<Row>();
+  }
+  if (!row) throw new Error("用户绑定失败。");
   if (!Boolean(row.active)) throw new Error("当前账号已停用，请联系管理员。");
   return mapUser(row);
+}
+
+export async function resolveNpdLocalUser(userId: string | null): Promise<NpdUser | null> {
+  await ensureNpdDatabase();
+  if (!userId) return null;
+  const row = await getDatabase().prepare("SELECT * FROM npd_users WHERE id=? AND active=1")
+    .bind(userId).first<Row>();
+  return row ? mapUser(row) : null;
+}
+
+export async function listNpdLocalLoginUsers(): Promise<NpdUser[]> {
+  await ensureNpdDatabase();
+  const rows = await getDatabase().prepare(`SELECT * FROM npd_users WHERE active=1
+    ORDER BY CASE role WHEN 'admin' THEN 0 ELSE 1 END, name`).all<Row>();
+  return rows.results.map(mapUser);
+}
+
+export async function getNpdLocalAuthState() {
+  await ensureNpdDatabase();
+  const row = await getDatabase().prepare(`SELECT COUNT(*) AS count FROM npd_users
+    WHERE active=1 AND role='admin' AND password_hash IS NOT NULL AND trim(password_hash)!=''`)
+    .first<{ count: number }>();
+  return { configured: Boolean(row?.count) };
+}
+
+export async function setupNpdLocalAdmin(input: {
+  email: string; name: string; department: string; password: string;
+}) {
+  await ensureNpdDatabase();
+  const database = getDatabase();
+  if ((await getNpdLocalAuthState()).configured) throw new Error("本地管理员已初始化，请直接登录。");
+  const email = normalizeEmail(input.email);
+  if (!isValidAccountEmail(email) || !input.name.trim() || !input.department.trim()) {
+    throw new Error("请填写管理员姓名、部门和有效登录邮箱。");
+  }
+  assertValidPassword(input.password);
+  const conflict = await database.prepare(`SELECT id FROM npd_users
+    WHERE lower(email)=lower(?) AND id<>'npd-u-admin'`).bind(email).first<Row>();
+  if (conflict) throw new Error("该邮箱已被其他演示账户占用，请更换邮箱。");
+  const credentials = await createPasswordCredentials(input.password);
+  const target = await database.prepare(`SELECT id FROM npd_users WHERE id='npd-u-admin'
+    UNION ALL SELECT id FROM npd_users WHERE role='admin' LIMIT 1`).first<Row>();
+  const userId = target ? String(target.id) : makeId("user");
+  if (target) {
+    await database.prepare(`UPDATE npd_users SET email=?,name=?,department=?,role='admin',
+      active=1,bootstrap_admin=1,password_salt=?,password_hash=?,updated_at=CURRENT_TIMESTAMP
+      WHERE id=?`).bind(email, input.name.trim(), input.department.trim(),
+        credentials.salt, credentials.hash, userId).run();
+  } else {
+    await database.prepare(`INSERT INTO npd_users (
+      id,email,name,department,role,active,bootstrap_admin,password_salt,password_hash
+    ) VALUES (?,?,?,?,'admin',1,1,?,?)`).bind(
+      userId, email, input.name.trim(), input.department.trim(), credentials.salt, credentials.hash,
+    ).run();
+  }
+  await addActivity(database, null, userId, "初始化本地管理员", "user", userId,
+    `${input.name.trim()} 已完成首次部署管理员账户初始化。`);
+  return createNpdLocalSession(database, userId);
+}
+
+export async function authenticateNpdLocalUser(emailValue: string, password: string) {
+  await ensureNpdDatabase();
+  const database = getDatabase();
+  const email = normalizeEmail(emailValue);
+  const row = await database.prepare(`SELECT * FROM npd_users
+    WHERE lower(email)=lower(?) AND active=1`).bind(email).first<Row>();
+  if (!row || !row.password_salt || !row.password_hash) {
+    throw new Error("邮箱或密码不正确，或管理员尚未为该账户设置本地密码。");
+  }
+  const credentials = await createPasswordCredentials(password, String(row.password_salt));
+  if (!constantTimeEqual(credentials.hash, String(row.password_hash))) {
+    throw new Error("邮箱或密码不正确，或管理员尚未为该账户设置本地密码。");
+  }
+  await database.prepare(`UPDATE npd_users SET last_login_at=CURRENT_TIMESTAMP,
+    updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(String(row.id)).run();
+  await addActivity(database, null, String(row.id), "登录本地系统", "session", null,
+    `${String(row.name)} 已登录本地新品开发系统。`);
+  return createNpdLocalSession(database, String(row.id));
+}
+
+export async function resolveNpdLocalSession(token: string | null): Promise<NpdUser | null> {
+  await ensureNpdDatabase();
+  if (!token) return null;
+  const database = getDatabase();
+  const tokenHash = await sha256Hex(token);
+  const row = await database.prepare(`SELECT u.* FROM npd_local_sessions s
+    JOIN npd_users u ON u.id=s.user_id
+    WHERE s.token_hash=? AND s.expires_at>CURRENT_TIMESTAMP AND u.active=1`).bind(tokenHash).first<Row>();
+  return row ? mapUser(row) : null;
+}
+
+export async function endNpdLocalSession(token: string | null) {
+  await ensureNpdDatabase();
+  if (!token) return;
+  await getDatabase().prepare("DELETE FROM npd_local_sessions WHERE token_hash=?")
+    .bind(await sha256Hex(token)).run();
+}
+
+async function createNpdLocalSession(database: D1Database, userId: string) {
+  const token = randomHex(32);
+  const expiresAt = sqliteTimestamp(new Date(Date.now() + 8 * 60 * 60 * 1000));
+  await database.batch([
+    database.prepare("DELETE FROM npd_local_sessions WHERE expires_at<=CURRENT_TIMESTAMP"),
+    database.prepare(`INSERT INTO npd_local_sessions (id,user_id,token_hash,expires_at)
+      VALUES (?,?,?,?)`).bind(makeId("session"), userId, await sha256Hex(token), expiresAt),
+  ]);
+  const row = await database.prepare("SELECT * FROM npd_users WHERE id=?").bind(userId).first<Row>();
+  if (!row) throw new Error("登录账户不存在。");
+  return { user: mapUser(row), token, maxAge: 8 * 60 * 60 };
 }
 
 export async function getNpdWorkspaceSnapshot(
@@ -531,6 +729,7 @@ export async function getNpdWorkspaceSnapshot(
     memberResult,
     motorResult,
     sheetResult,
+    revisionResult,
     formResult,
     partResult,
     testResult,
@@ -563,6 +762,9 @@ export async function getNpdWorkspaceSnapshot(
     database.prepare(`SELECT s.*, u.name AS updated_by_name
       FROM npd_project_sheets s LEFT JOIN npd_users u ON u.id=s.updated_by
       ORDER BY s.project_id, s.sort_order`).all<Row>(),
+    database.prepare(`SELECT r.*, u.name AS actor_name
+      FROM npd_sheet_revisions r JOIN npd_users u ON u.id=r.actor_id
+      ORDER BY r.project_id,r.sheet_code,r.version DESC`).all<Row>(),
     database.prepare(`SELECT f.*, u.name AS updated_by_name
       FROM npd_form_records f LEFT JOIN npd_users u ON u.id=f.updated_by
       ORDER BY f.project_id, f.sheet_code, f.form_code`).all<Row>(),
@@ -645,6 +847,8 @@ export async function getNpdWorkspaceSnapshot(
     members: members.filter((row) => visibleIds.has(row.projectId)),
     motors,
     sheets,
+    sheetRevisions: revisionResult.results.map(mapSheetRevision)
+      .filter((row) => visibleIds.has(row.projectId)),
     formRecords: forms,
     parts: partResult.results.map(mapPart).filter((row) => visibleIds.has(row.projectId)),
     testReports: testResult.results.map(mapTestReport).filter((row) => visibleIds.has(row.projectId)),
@@ -722,14 +926,30 @@ function mapMember(row: Row): ProjectMember {
 function mapMotor(row: Row): ProjectMotor {
   return {
     id: String(row.id), projectId: String(row.project_id), model: String(row.model),
-    motorCode: String(row.motor_code || ""), ratedPower: String(row.rated_power || ""),
+    ratedPower: String(row.rated_power || ""),
     voltage: String(row.voltage || ""), frequency: String(row.frequency || ""),
     poles: String(row.poles || ""), speed: String(row.speed || ""),
     frameSize: String(row.frame_size || ""), mounting: String(row.mounting || ""),
-    quantity: Number(row.quantity || 1), inspectionRequirement: String(row.inspection_requirement || ""),
+    terminalMode: String(row.terminal_mode || ""),
+    protectionGrade: String(row.protection_grade || ""),
+    insulationClass: String(row.insulation_class || ""),
+    coolingMethod: String(row.cooling_method || ""),
+    quantity: Number(row.quantity || 1), designRevision: Number(row.design_revision || 1),
+    inspectionRequirement: String(row.inspection_requirement || ""),
     testRequirement: String(row.test_requirement || ""), plannedDate: String(row.planned_date),
     actualDate: row.actual_date ? String(row.actual_date) : null, status: String(row.status),
     createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+  };
+}
+
+function mapSheetRevision(row: Row): SheetRevision {
+  return {
+    id: String(row.id), projectId: String(row.project_id),
+    sheetCode: String(row.sheet_code) as SheetCode, version: Number(row.version || 1),
+    action: String(row.action), summary: String(row.summary), reason: String(row.reason || ""),
+    status: String(row.status) as SheetStatus, progress: Number(row.progress || 0),
+    plannedDate: String(row.planned_date), actorId: String(row.actor_id),
+    actorName: String(row.actor_name || ""), createdAt: String(row.created_at),
   };
 }
 
@@ -773,6 +993,7 @@ function mapPart(row: Row): PartItem {
     confirmedBy: row.confirmed_by ? String(row.confirmed_by) : null,
     confirmedByName: String(row.confirmed_by_name || ""),
     confirmedAt: row.confirmed_at ? String(row.confirmed_at) : null,
+    designRevision: Number(row.design_revision || 1),
     createdAt: String(row.created_at), updatedAt: String(row.updated_at),
   };
 }
@@ -786,7 +1007,8 @@ function mapTestReport(row: Row): TestReport {
     result: String(row.result), conclusion: String(row.conclusion || ""),
     documentId: row.document_id ? String(row.document_id) : null,
     fileName: String(row.file_name || ""), submittedBy: String(row.submitted_by),
-    submittedByName: String(row.submitted_by_name || ""), createdAt: String(row.created_at),
+    submittedByName: String(row.submitted_by_name || ""),
+    requirementRevision: Number(row.requirement_revision || 1), createdAt: String(row.created_at),
   };
 }
 
@@ -804,7 +1026,8 @@ function mapInspection(row: Row): InspectionRecord {
     conclusion: String(row.conclusion || ""),
     documentId: row.document_id ? String(row.document_id) : null,
     fileName: String(row.file_name || ""), inspectorId: String(row.inspector_id),
-    inspectorName: String(row.inspector_name || ""), createdAt: String(row.created_at),
+    inspectorName: String(row.inspector_name || ""),
+    requirementRevision: Number(row.requirement_revision || 1), createdAt: String(row.created_at),
   };
 }
 
@@ -838,6 +1061,8 @@ export interface CreateNpdProjectInput {
   source: string;
   customerId: string;
   ownerId: string;
+  processId: string;
+  procurementId: string;
   productionId: string;
   testerId: string;
   qualityId: string;
@@ -849,7 +1074,6 @@ export interface CreateNpdProjectInput {
   orderIds?: string[];
   motors: Array<{
     model: string;
-    motorCode: string;
     ratedPower: string;
     voltage: string;
     frequency: string;
@@ -857,6 +1081,10 @@ export interface CreateNpdProjectInput {
     speed: string;
     frameSize: string;
     mounting: string;
+    terminalMode: string;
+    protectionGrade: string;
+    insulationClass: string;
+    coolingMethod: string;
     quantity: number;
     inspectionRequirement: string;
     testRequirement: string;
@@ -894,6 +1122,8 @@ export async function createNpdProject(
     throw new Error("项目负责人必须是有效的销售、设计或管理员。");
   }
   const requiredAssignments: Array<[string, NpdRole, string]> = [
+    [input.processId, "process", "工艺方案、工装及可制造性确认"],
+    [input.procurementId, "procurement", "外购外协件询价、供应商与到料节点"],
     [input.productionId, "production", "整机及零部件节点确认"],
     [input.testerId, "tester", "型式试验与验证报告"],
     [input.qualityId, "quality", "零部件及整机质量检验"],
@@ -948,14 +1178,16 @@ export async function createNpdProject(
   input.motors.forEach((motor) => statements.push(
     database.prepare(`INSERT INTO npd_project_motors (
       id,project_id,model,motor_code,rated_power,voltage,frequency,poles,speed,
-      frame_size,mounting,quantity,inspection_requirement,test_requirement,
-      planned_date,status
-    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'planned')`).bind(
-      makeId("motor"), id, motor.model.trim(), motor.motorCode?.trim() || "",
+      frame_size,mounting,terminal_mode,protection_grade,insulation_class,cooling_method,
+      quantity,inspection_requirement,test_requirement,planned_date,status
+    ) VALUES (?,?,?,'',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'planned')`).bind(
+      makeId("motor"), id, motor.model.trim(),
       motor.ratedPower?.trim() || "", motor.voltage?.trim() || "",
       motor.frequency?.trim() || "50Hz", motor.poles?.trim() || "",
       motor.speed?.trim() || "", motor.frameSize?.trim() || "",
-      motor.mounting?.trim() || "", Math.max(1, Number(motor.quantity || 1)),
+      motor.mounting?.trim() || "", motor.terminalMode?.trim() || "",
+      motor.protectionGrade?.trim() || "", motor.insulationClass?.trim() || "",
+      motor.coolingMethod?.trim() || "", Math.max(1, Number(motor.quantity || 1)),
       motor.inspectionRequirement?.trim() || "", motor.testRequirement?.trim() || "",
       validDate(motor.plannedDate) ? motor.plannedDate : input.plannedEnd,
     ),
@@ -969,6 +1201,17 @@ export async function createNpdProject(
       makeId("sheet"), id, sheet.code, sheet.title, sheet.index, sheet.ownerRole,
       interpolateDate(input.plannedStart, input.plannedEnd, sheetScheduleRatios[index]),
       currentUser.id,
+    ),
+  ));
+  sheetDefinitions.forEach((sheet, index) => statements.push(
+    database.prepare(`INSERT INTO npd_sheet_revisions (
+      id,project_id,sheet_code,version,action,summary,reason,status,progress,
+      planned_date,actor_id,snapshot
+    ) VALUES (?,?,?,1,'创建阶段','项目创建时自动生成阶段 Sheet','首次创建',
+      'not_started',0,?,?,?)`).bind(
+      makeId("revision"), id, sheet.code,
+      interpolateDate(input.plannedStart, input.plannedEnd, sheetScheduleRatios[index]),
+      currentUser.id, JSON.stringify({ source: "project_creation" }),
     ),
   ));
   orderIds.forEach((orderId) => statements.push(
@@ -1077,20 +1320,70 @@ export async function addProjectMotor(
   const id = makeId("motor");
   await database.prepare(`INSERT INTO npd_project_motors (
     id,project_id,model,motor_code,rated_power,voltage,frequency,poles,speed,
-    frame_size,mounting,quantity,inspection_requirement,test_requirement,
-    planned_date,status
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'planned')`).bind(
-    id, projectId, input.model.trim(), input.motorCode?.trim() || "",
+    frame_size,mounting,terminal_mode,protection_grade,insulation_class,cooling_method,
+    quantity,inspection_requirement,test_requirement,planned_date,status
+  ) VALUES (?,?,?,'',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'planned')`).bind(
+    id, projectId, input.model.trim(),
     input.ratedPower?.trim() || "", input.voltage?.trim() || "",
     input.frequency?.trim() || "50Hz", input.poles?.trim() || "",
     input.speed?.trim() || "", input.frameSize?.trim() || "",
-    input.mounting?.trim() || "", Math.max(1, Number(input.quantity || 1)),
+    input.mounting?.trim() || "", input.terminalMode?.trim() || "",
+    input.protectionGrade?.trim() || "", input.insulationClass?.trim() || "",
+    input.coolingMethod?.trim() || "", Math.max(1, Number(input.quantity || 1)),
     input.inspectionRequirement?.trim() || "", input.testRequirement?.trim() || "",
     input.plannedDate,
   ).run();
   await addActivity(database, projectId, currentUser.id, "增加电机规格", "motor", id,
     `新增规格 ${input.model.trim()}，计划完成日期 ${input.plannedDate}。`);
+  await reviseProjectSheet(database, projectId, "input_output", currentUser.id, {
+    action: "增加电机规格", summary: `新增规格 ${input.model.trim()}`,
+    reason: "项目范围增加", progress: 40, snapshot: { motorId: id, designRevision: 1 },
+  }, true);
   return { id };
+}
+
+export async function updateProjectMotor(
+  motorId: string,
+  input: CreateNpdProjectInput["motors"][number] & { changeReason: string },
+  currentUser: NpdUser,
+) {
+  await ensureNpdDatabase();
+  const database = getDatabase();
+  const motor = await database.prepare("SELECT * FROM npd_project_motors WHERE id=?")
+    .bind(motorId).first<Row>();
+  if (!motor) throw new Error("电机规格不存在。");
+  const project = await assertProjectAccess(database, currentUser, String(motor.project_id));
+  if (currentUser.role !== "admin" && currentUser.role !== "design" &&
+      !isProjectSteward(currentUser, project)) {
+    throw new Error("只有设计、项目负责人或管理员可以修改电机规格。");
+  }
+  if (!input.model?.trim() || !validDate(input.plannedDate) || !input.changeReason?.trim()) {
+    throw new Error("电机型号、计划日期和变更原因均为必填项。");
+  }
+  const duplicate = await database.prepare(`SELECT id FROM npd_project_motors
+    WHERE project_id=? AND lower(model)=lower(?) AND id<>?`).bind(
+      String(motor.project_id), input.model.trim(), motorId,
+    ).first<Row>();
+  if (duplicate) throw new Error("该项目下已存在同型号电机规格。");
+  const designRevision = Number(motor.design_revision || 1) + 1;
+  await database.prepare(`UPDATE npd_project_motors SET model=?,rated_power=?,voltage=?,
+    frequency=?,poles=?,speed=?,frame_size=?,mounting=?,terminal_mode=?,protection_grade=?,
+    insulation_class=?,cooling_method=?,quantity=?,inspection_requirement=?,test_requirement=?,
+    planned_date=?,design_revision=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(
+    input.model.trim(), input.ratedPower?.trim() || "", input.voltage?.trim() || "",
+    input.frequency?.trim() || "50Hz", input.poles?.trim() || "", input.speed?.trim() || "",
+    input.frameSize?.trim() || "", input.mounting?.trim() || "", input.terminalMode?.trim() || "",
+    input.protectionGrade?.trim() || "", input.insulationClass?.trim() || "",
+    input.coolingMethod?.trim() || "", Math.max(1, Number(input.quantity || 1)),
+    input.inspectionRequirement?.trim() || "", input.testRequirement?.trim() || "",
+    input.plannedDate, designRevision, motorId,
+  ).run();
+  await addActivity(database, String(motor.project_id), currentUser.id, "变更电机规格", "motor", motorId,
+    `${String(motor.model)} 更新为 ${input.model.trim()} · 设计版次 R${designRevision}：${input.changeReason.trim()}。`);
+  await reviseProjectSheet(database, String(motor.project_id), "input_output", currentUser.id, {
+    action: "变更电机规格", summary: `${input.model.trim()} 升级至设计版次 R${designRevision}`,
+    reason: input.changeReason, snapshot: { motorId, previousRevision: motor.design_revision, designRevision },
+  }, true);
 }
 
 export async function updateMotorRequirements(
@@ -1114,11 +1407,17 @@ export async function updateMotorRequirements(
   if (!inspectionRequirement.trim() || !testRequirement.trim()) {
     throw new Error("检验要求和试验要求均不能为空。");
   }
+  const designRevision = Number(motor.design_revision || 1) + 1;
   await database.prepare(`UPDATE npd_project_motors SET
-    inspection_requirement=?, test_requirement=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`)
-    .bind(inspectionRequirement.trim(), testRequirement.trim(), motorId).run();
+    inspection_requirement=?, test_requirement=?,design_revision=?,
+    updated_at=CURRENT_TIMESTAMP WHERE id=?`)
+    .bind(inspectionRequirement.trim(), testRequirement.trim(), designRevision, motorId).run();
   await addActivity(database, String(motor.project_id), currentUser.id, "更新设计输出要求", "motor", motorId,
-    `${String(motor.model)} 的检验要求和试验要求已更新。`);
+    `${String(motor.model)} 的检验要求和试验要求已更新至 R${designRevision}。`);
+  await reviseProjectSheet(database, String(motor.project_id), "input_output", currentUser.id, {
+    action: "更新设计输出要求", summary: `${String(motor.model)} 检验/试验要求更新至 R${designRevision}`,
+    reason: "设计输出要求调整", snapshot: { motorId, designRevision },
+  }, true);
 }
 
 export async function saveNpdFormRecord(
@@ -1127,6 +1426,7 @@ export async function saveNpdFormRecord(
   payload: Record<string, unknown>,
   submit: boolean,
   currentUser: NpdUser,
+  changeReason = "",
 ) {
   const sheetCode = formToSheet[formCode];
   if (!sheetCode) throw new Error("表单未映射到开发阶段 Sheet。");
@@ -1148,15 +1448,20 @@ export async function saveNpdFormRecord(
     }
   }
   const existing = await database.prepare(
-    "SELECT id,version FROM npd_form_records WHERE project_id=? AND form_code=?",
-  ).bind(projectId, formCode).first<{ id: string; version: number }>();
+    "SELECT id,version,status,payload FROM npd_form_records WHERE project_id=? AND form_code=?",
+  ).bind(projectId, formCode).first<{ id: string; version: number; status: string; payload: string }>();
+  const sheetBefore = await database.prepare(`SELECT status FROM npd_project_sheets
+    WHERE project_id=? AND code=?`).bind(projectId, sheetCode).first<Row>();
+  if ((existing?.status === "submitted" || sheetBefore?.status === "completed") && !changeReason.trim()) {
+    throw new Error("已提交或已完成节点的数据再次修改时，必须填写变更原因。");
+  }
   const status = submit ? "submitted" : "draft";
   const serialized = JSON.stringify(payload);
   let id = existing?.id;
   if (existing) {
     await database.prepare(`UPDATE npd_form_records SET status=?, payload=?,
       version=?, updated_by=?, updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(
-      status, serialized, submit ? existing.version + 1 : existing.version,
+      status, serialized, existing.version + 1,
       currentUser.id, existing.id,
     ).run();
   } else {
@@ -1177,20 +1482,24 @@ export async function saveNpdFormRecord(
   const sheetProgress = sheetForms.length
     ? Math.min(90, Math.round(((submitted?.count || 0) / sheetForms.length) * 90))
     : 10;
-  await database.prepare(`UPDATE npd_project_sheets SET status=?,progress=?,
-    updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE project_id=? AND code=?`)
-    .bind(sheetStatus, sheetProgress, currentUser.id, projectId, sheetCode).run();
   await addActivity(database, projectId, currentUser.id,
     submit ? "提交阶段表单" : "保存阶段表单", "form", id || null,
     `${definition.name} ${submit ? "已提交" : "已保存草稿"}。`);
-  await recalculateProject(database, projectId);
+  await reviseProjectSheet(database, projectId, sheetCode, currentUser.id, {
+    action: submit ? "提交阶段表单" : "保存阶段表单",
+    summary: `${definition.name}${submit ? "提交" : "保存草稿"}，表单版本 V${existing ? existing.version + 1 : 1}`,
+    reason: changeReason.trim() || (existing ? "表单内容更新" : "首次录入"),
+    status: sheetBefore?.status === "completed" ? "pending_review" : sheetStatus,
+    progress: sheetProgress,
+    snapshot: { formCode, formVersion: existing ? existing.version + 1 : 1, formStatus: status },
+  }, true);
   return { id };
 }
 
 export async function updateProjectSheet(
   projectId: string,
   sheetCode: SheetCode,
-  input: { status: SheetStatus; progress: number; plannedDate: string; note: string },
+  input: { status: SheetStatus; progress: number; plannedDate: string; note: string; changeReason: string },
   currentUser: NpdUser,
 ) {
   const { database, project } = await getEditableProject(projectId, currentUser);
@@ -1200,21 +1509,18 @@ export async function updateProjectSheet(
   if (!validDate(input.plannedDate) || input.progress < 0 || input.progress > 100) {
     throw new Error("请填写有效的计划日期和 0～100 的完成度。");
   }
+  if (!input.changeReason?.trim()) throw new Error("阶段状态、进度或节点日期变更必须填写原因。");
   if (input.status === "completed") {
     await validateSheetCompletion(database, projectId, sheetCode);
   }
-  const actualDate = input.status === "completed" ? currentDateIso() : null;
   const progress = input.status === "completed" ? 100 : Math.round(input.progress);
-  await database.prepare(`UPDATE npd_project_sheets SET status=?,progress=?,
-    planned_date=?,actual_date=?,note=?,version=CASE WHEN status!='completed' AND ?='completed'
-      THEN version+1 ELSE version END,updated_by=?,updated_at=CURRENT_TIMESTAMP
-    WHERE project_id=? AND code=?`).bind(
-      input.status, progress, input.plannedDate, actualDate, input.note.trim(),
-      input.status, currentUser.id, projectId, sheetCode,
-    ).run();
   await addActivity(database, projectId, currentUser.id, "更新阶段 Sheet", "sheet", sheetCode,
-    `${sheetByCode[sheetCode].title} 更新为“${sheetStatusText(input.status)}”，完成度 ${progress}%。`);
-  await recalculateProject(database, projectId);
+    `${sheetByCode[sheetCode].title} 更新为“${sheetStatusText(input.status)}”，完成度 ${progress}%：${input.changeReason.trim()}。`);
+  await reviseProjectSheet(database, projectId, sheetCode, currentUser.id, {
+    action: "更新阶段状态", summary: `状态更新为${sheetStatusText(input.status)}，完成度 ${progress}%`,
+    reason: input.changeReason, status: input.status, progress, plannedDate: input.plannedDate,
+    note: input.note, snapshot: { requestedStatus: input.status },
+  }, true);
 }
 
 export async function addPartItem(
@@ -1237,9 +1543,10 @@ export async function addPartItem(
   const { database, project } = await getEditableProject(input.projectId, currentUser);
   if (
     currentUser.role !== "admin" && currentUser.role !== "design" &&
+    currentUser.role !== "process" && currentUser.role !== "procurement" &&
     currentUser.role !== "production" && !isProjectSteward(currentUser, project)
   ) {
-    throw new Error("只有设计、生产、项目负责人或管理员可以新增零部件。");
+    throw new Error("只有设计、工艺、采购、生产、项目负责人或管理员可以新增零部件。");
   }
   if (
     !input.partNo?.trim() || !input.name?.trim() || !input.designOutputRef?.trim() ||
@@ -1264,13 +1571,56 @@ export async function addPartItem(
     input.designOutputRef.trim(), input.inspectionRequirement.trim(),
     input.testRequirement?.trim() || "", input.plannedDate,
   ).run();
-  await database.prepare(`UPDATE npd_project_sheets SET status='in_progress',
-    progress=MAX(progress,10),updated_by=?,updated_at=CURRENT_TIMESTAMP
-    WHERE project_id=? AND code='parts_plan'`).bind(currentUser.id, input.projectId).run();
   await addActivity(database, input.projectId, currentUser.id, "新增零部件", "part", id,
     `${input.partNo.trim()} ${input.name.trim()} 已加入节点计划，检验要求关联 ${input.designOutputRef.trim()}。`);
-  await recalculateProject(database, input.projectId);
+  await reviseProjectSheet(database, input.projectId, "parts_plan", currentUser.id, {
+    action: "新增零部件", summary: `${input.partNo.trim()} ${input.name.trim()} 加入节点计划`,
+    reason: "零部件范围增加", progress: 10, snapshot: { partId: id, designRevision: 1 },
+  }, true);
   return { id };
+}
+
+export async function updatePartItem(
+  partId: string,
+  input: Omit<Parameters<typeof addPartItem>[0], "projectId"> & { changeReason: string },
+  currentUser: NpdUser,
+) {
+  await ensureNpdDatabase();
+  const database = getDatabase();
+  const part = await database.prepare("SELECT * FROM npd_part_items WHERE id=?")
+    .bind(partId).first<Row>();
+  if (!part) throw new Error("零部件记录不存在。");
+  const project = await assertProjectAccess(database, currentUser, String(part.project_id));
+  if (!["admin", "design", "process", "procurement"].includes(currentUser.role) &&
+      !isProjectSteward(currentUser, project)) {
+    throw new Error("只有设计、工艺、采购、项目负责人或管理员可以修改零部件设计输出。");
+  }
+  if (!input.changeReason?.trim() || !input.partNo?.trim() || !input.name?.trim() ||
+      !input.designOutputRef?.trim() || !input.inspectionRequirement?.trim() ||
+      !validDate(input.plannedDate)) {
+    throw new Error("编号、名称、设计输出引用、检验要求、计划日期和变更原因均为必填项。");
+  }
+  if (input.motorId) {
+    const motor = await database.prepare(`SELECT id FROM npd_project_motors
+      WHERE id=? AND project_id=?`).bind(input.motorId, String(part.project_id)).first<Row>();
+    if (!motor) throw new Error("关联电机规格不属于当前项目。");
+  }
+  const designRevision = Number(part.design_revision || 1) + 1;
+  await database.prepare(`UPDATE npd_part_items SET motor_id=?,part_no=?,name=?,specification=?,
+    material=?,quantity=?,source_type=?,design_output_ref=?,inspection_requirement=?,
+    test_requirement=?,planned_date=?,design_revision=?,status='planned',actual_date=NULL,
+    confirmed_by=NULL,confirmed_at=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(
+    input.motorId, input.partNo.trim(), input.name.trim(), input.specification?.trim() || "",
+    input.material?.trim() || "", Math.max(1, Number(input.quantity || 1)),
+    input.sourceType || "自制", input.designOutputRef.trim(), input.inspectionRequirement.trim(),
+    input.testRequirement?.trim() || "", input.plannedDate, designRevision, partId,
+  ).run();
+  await addActivity(database, String(part.project_id), currentUser.id, "变更零部件", "part", partId,
+    `${input.partNo.trim()} ${input.name.trim()} 更新至设计版次 R${designRevision}：${input.changeReason.trim()}。`);
+  await reviseProjectSheet(database, String(part.project_id), "parts_plan", currentUser.id, {
+    action: "变更零部件", summary: `${input.partNo.trim()} ${input.name.trim()} 更新至 R${designRevision}`,
+    reason: input.changeReason, snapshot: { partId, designRevision, previousRevision: part.design_revision },
+  }, true);
 }
 
 export async function confirmPartItem(
@@ -1334,11 +1684,12 @@ export async function createTestReport(
   const id = makeId("test");
   await database.prepare(`INSERT INTO npd_test_reports (
     id,project_id,motor_id,report_no,report_type,title,requirement_ref,test_date,
-    result,conclusion,document_id,submitted_by
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+    result,conclusion,document_id,requirement_revision,submitted_by
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
     id, input.projectId, input.motorId, input.reportNo.trim(), input.reportType,
     input.title.trim(), input.requirementRef.trim(), input.testDate, input.result,
-    input.conclusion?.trim() || "", input.documentId, currentUser.id,
+    input.conclusion?.trim() || "", input.documentId,
+    Number(motor.design_revision || 1), currentUser.id,
   ).run();
   if (input.documentId) {
     await database.prepare(`UPDATE npd_documents SET linked_record_id=?,kind='test_report',
@@ -1376,6 +1727,7 @@ export async function createInspectionRecord(
   let requirement = "";
   let designOutputRef = "";
   let itemName = "";
+  let requirementRevision = 1;
   if (input.itemType === "motor") {
     if (!input.motorId) throw new Error("请选择待检验的整机规格。");
     const motor = await database.prepare(
@@ -1385,6 +1737,7 @@ export async function createInspectionRecord(
     requirement = String(motor.inspection_requirement || "").trim();
     designOutputRef = `电机设计输出 · ${String(motor.model)}`;
     itemName = String(motor.model);
+    requirementRevision = Number(motor.design_revision || 1);
   } else {
     if (!input.partItemId) throw new Error("请选择待检验的零部件。");
     const part = await database.prepare(
@@ -1394,6 +1747,7 @@ export async function createInspectionRecord(
     requirement = String(part.inspection_requirement || "").trim();
     designOutputRef = String(part.design_output_ref || "").trim();
     itemName = `${String(part.part_no)} ${String(part.name)}`;
+    requirementRevision = Number(part.design_revision || 1);
   }
   if (!requirement || !designOutputRef) {
     throw new Error("该对象尚未在设计输出中配置检验要求，不能提交检验记录。");
@@ -1402,11 +1756,11 @@ export async function createInspectionRecord(
   const id = makeId("inspection");
   await database.prepare(`INSERT INTO npd_inspection_records (
     id,project_id,motor_id,part_item_id,item_type,inspection_requirement,
-    design_output_ref,inspection_date,result,conclusion,document_id,inspector_id
-  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+    design_output_ref,inspection_date,result,conclusion,document_id,requirement_revision,inspector_id
+  ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
     id, input.projectId, input.motorId, input.partItemId, input.itemType,
     requirement, designOutputRef, input.inspectionDate, input.result,
-    input.conclusion?.trim() || "", input.documentId, currentUser.id,
+    input.conclusion?.trim() || "", input.documentId, requirementRevision, currentUser.id,
   ).run();
   if (input.documentId) {
     await database.prepare(`UPDATE npd_documents SET linked_record_id=?,kind='inspection_record',
@@ -1471,6 +1825,7 @@ export interface CreateNpdUserInput {
   department: string;
   role: NpdRole;
   active: boolean;
+  password?: string;
 }
 
 export async function createNpdUser(
@@ -1488,15 +1843,17 @@ export async function createNpdUser(
   if (!isValidAccountEmail(email)) throw new Error("请填写有效的登录邮箱。");
   if (!department) throw new Error("请填写所属部门。");
   if (!isNpdRole(input.role)) throw new Error("登录类型无效。");
+  const credentials = input.password ? await createPasswordCredentials(input.password) : null;
   const duplicate = await database.prepare(
     "SELECT id FROM npd_users WHERE lower(email)=lower(?)",
   ).bind(email).first<{ id: string }>();
   if (duplicate) throw new Error("该登录邮箱已存在，请直接维护原账户。");
   const id = makeId("user");
   await database.prepare(`INSERT INTO npd_users
-    (id,email,name,department,role,active,bootstrap_admin)
-    VALUES (?,?,?,?,?,?,0)`).bind(
+    (id,email,name,department,role,active,bootstrap_admin,password_salt,password_hash)
+    VALUES (?,?,?,?,?,?,0,?,?)`).bind(
       id, email, name, department, input.role, input.active ? 1 : 0,
+      credentials?.salt || null, credentials?.hash || null,
     ).run();
   await addActivity(database, null, currentUser.id, "新建登录账户", "user", id,
     `${name}（${email}）已创建为${roleLabels[input.role]}，账号${input.active ? "启用" : "停用"}。`);
@@ -1507,7 +1864,7 @@ export async function createNpdUser(
 }
 
 export async function updateNpdUser(
-  input: { userId: string; email: string; name: string; role: NpdRole; department: string; active: boolean },
+  input: { userId: string; email: string; name: string; role: NpdRole; department: string; active: boolean; password?: string },
   currentUser: NpdUser,
 ) {
   await ensureNpdDatabase();
@@ -1524,6 +1881,7 @@ export async function updateNpdUser(
   if (!isValidAccountEmail(email)) throw new Error("请填写有效的登录邮箱。");
   if (!department) throw new Error("请填写所属部门。");
   if (!isNpdRole(input.role)) throw new Error("登录类型无效。");
+  const credentials = input.password ? await createPasswordCredentials(input.password) : null;
   if (input.userId === currentUser.id && !input.active) {
     throw new Error("不能停用当前登录账户，请由其他管理员操作。");
   }
@@ -1541,8 +1899,10 @@ export async function updateNpdUser(
     if ((admins?.count || 0) <= 1) throw new Error("系统必须保留至少一名有效管理员。");
   }
   await database.prepare(`UPDATE npd_users SET email=?,name=?,role=?,department=?,active=?,
+    password_salt=COALESCE(?,password_salt),password_hash=COALESCE(?,password_hash),
     updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(
-      email, name, input.role, department, input.active ? 1 : 0, input.userId,
+      email, name, input.role, department, input.active ? 1 : 0,
+      credentials?.salt || null, credentials?.hash || null, input.userId,
     ).run();
   await addActivity(database, null, currentUser.id, "更新人员权限", "user", input.userId,
     `${name}（${email}）调整为${roleLabels[input.role]}，账号${input.active ? "启用" : "停用"}。`);
@@ -1600,6 +1960,10 @@ export async function insertNpdDocument(
   ).run();
   await addActivity(database, input.projectId, currentUser.id, "上传附件", "document", id,
     `${input.fileName} 已上传至 ${sheetByCode[input.sheetCode].shortTitle}。`);
+  await reviseProjectSheet(database, input.projectId, input.sheetCode, currentUser.id, {
+    action: "上传阶段附件", summary: `新增附件 ${input.fileName}`,
+    reason: "补充阶段证据", snapshot: { documentId: id, kind: input.kind, motorId: input.motorId },
+  }, true);
   return id;
 }
 
@@ -1630,6 +1994,7 @@ export async function getNpdProjectArchiveData(
     members: snapshot.members.filter((row) => row.projectId === projectId),
     motors: snapshot.motors.filter((row) => row.projectId === projectId),
     sheets: snapshot.sheets.filter((row) => row.projectId === projectId),
+    revisions: snapshot.sheetRevisions.filter((row) => row.projectId === projectId),
     forms: snapshot.formRecords.filter((row) => row.projectId === projectId),
     parts: snapshot.parts.filter((row) => row.projectId === projectId),
     tests: snapshot.testReports.filter((row) => row.projectId === projectId),
@@ -1671,6 +2036,102 @@ async function assertProjectAccess(
   return project;
 }
 
+type SheetRevisionChange = {
+  action: string;
+  summary: string;
+  reason?: string;
+  status?: SheetStatus;
+  progress?: number;
+  plannedDate?: string;
+  note?: string;
+  snapshot?: Record<string, unknown>;
+};
+
+async function reviseProjectSheet(
+  database: D1Database,
+  projectId: string,
+  sheetCode: SheetCode,
+  actorId: string,
+  change: SheetRevisionChange,
+  invalidateDownstream = false,
+) {
+  const current = await database.prepare(`SELECT * FROM npd_project_sheets
+    WHERE project_id=? AND code=?`).bind(projectId, sheetCode).first<Row>();
+  if (!current) throw new Error("项目阶段 Sheet 不存在。");
+  const requestedStatus = change.status || String(current.status) as SheetStatus;
+  const status = invalidateDownstream && current.status === "completed" && change.status === undefined
+    ? "pending_review"
+    : requestedStatus;
+  const progress = status === "completed"
+    ? 100
+    : Math.max(0, Math.min(99, Math.round(change.progress ?? Number(current.progress || 0))));
+  const plannedDate = change.plannedDate || String(current.planned_date);
+  const note = change.note === undefined ? String(current.note || "") : change.note.trim();
+  const actualDate = status === "completed"
+    ? (current.actual_date || currentDateIso())
+    : null;
+  const version = Number(current.version || 1) + 1;
+  const snapshot = JSON.stringify({
+    status, progress, plannedDate, actualDate, note,
+    ...(change.snapshot || {}),
+  });
+  const statements: D1PreparedStatement[] = [
+    database.prepare(`UPDATE npd_project_sheets SET status=?,progress=?,planned_date=?,
+      actual_date=?,note=?,version=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
+      WHERE project_id=? AND code=?`).bind(
+      status, progress, plannedDate, actualDate, note, version, actorId, projectId, sheetCode,
+    ),
+    database.prepare(`INSERT INTO npd_sheet_revisions (
+      id,project_id,sheet_code,version,action,summary,reason,status,progress,
+      planned_date,actor_id,snapshot
+    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(
+      makeId("revision"), projectId, sheetCode, version, change.action,
+      change.summary, change.reason?.trim() || "日常维护", status, progress,
+      plannedDate, actorId, snapshot,
+    ),
+  ];
+  await database.batch(statements);
+  if (invalidateDownstream) {
+    await invalidateDownstreamSheets(database, projectId, Number(current.sort_order), actorId,
+      `${sheetByCode[sheetCode].shortTitle}发生变更：${change.summary}`);
+  }
+  await recalculateProject(database, projectId);
+  return version;
+}
+
+async function invalidateDownstreamSheets(
+  database: D1Database,
+  projectId: string,
+  afterSortOrder: number,
+  actorId: string,
+  reason: string,
+) {
+  const rows = await database.prepare(`SELECT * FROM npd_project_sheets
+    WHERE project_id=? AND sort_order>? AND status IN ('completed','pending_review')
+    ORDER BY sort_order`).bind(projectId, afterSortOrder).all<Row>();
+  if (!rows.results.length) return;
+  const statements: D1PreparedStatement[] = [];
+  for (const row of rows.results) {
+    const version = Number(row.version || 1) + 1;
+    const progress = Math.min(90, Number(row.progress || 0));
+    const sheetCode = String(row.code) as SheetCode;
+    const note = `待复核：${reason}`;
+    statements.push(database.prepare(`UPDATE npd_project_sheets SET status='pending_review',
+      progress=?,actual_date=NULL,note=?,version=?,updated_by=?,updated_at=CURRENT_TIMESTAMP
+      WHERE id=?`).bind(progress, note, version, actorId, String(row.id)));
+    statements.push(database.prepare(`INSERT INTO npd_sheet_revisions (
+      id,project_id,sheet_code,version,action,summary,reason,status,progress,
+      planned_date,actor_id,snapshot
+    ) VALUES (?,?,?,?,'触发下游复核','上游数据变更，原阶段结论保留并转为待复核',?,
+      'pending_review',?,?,?)`).bind(
+      makeId("revision"), projectId, sheetCode, version, reason, progress,
+      String(row.planned_date), actorId,
+      JSON.stringify({ previousStatus: row.status, previousVersion: row.version, note }),
+    ));
+  }
+  await database.batch(statements);
+}
+
 async function validateSheetCompletion(
   database: D1Database,
   projectId: string,
@@ -1704,39 +2165,49 @@ async function validateSheetCompletion(
     }
   }
   if (sheetCode === "verification") {
-    const motors = await database.prepare("SELECT id,model FROM npd_project_motors WHERE project_id=?")
+    const motors = await database.prepare(`SELECT id,model,design_revision
+      FROM npd_project_motors WHERE project_id=?`)
       .bind(projectId).all<Row>();
-    const reports = await database.prepare("SELECT motor_id,result FROM npd_test_reports WHERE project_id=?")
+    const reports = await database.prepare(`SELECT motor_id,result,requirement_revision,created_at
+      FROM npd_test_reports WHERE project_id=? ORDER BY created_at DESC`)
       .bind(projectId).all<Row>();
-    const missing = motors.results.filter((motor) =>
-      !reports.results.some((report) => report.motor_id === motor.id),
-    );
+    const currentReports = motors.results.map((motor) => reports.results.find((report) =>
+      report.motor_id === motor.id && Number(report.requirement_revision || 1) === Number(motor.design_revision || 1),
+    ));
+    const missing = motors.results.filter((_, index) => !currentReports[index]);
     if (missing.length) throw new Error(`以下规格尚无试验报告：${missing.map((row) => row.model).join("、")}。`);
-    if (reports.results.some((report) => !["合格", "有条件合格"].includes(String(report.result)))) {
-      throw new Error("存在不合格试验报告，验证阶段不能完成。");
+    if (currentReports.some((report) => report && !["合格", "有条件合格"].includes(String(report.result)))) {
+      throw new Error("当前设计版次的最新试验结论不合格，验证阶段不能完成。");
     }
   }
   if (sheetCode === "quality_inspection") {
-    const motors = await database.prepare("SELECT id,model FROM npd_project_motors WHERE project_id=?")
+    const motors = await database.prepare(`SELECT id,model,design_revision
+      FROM npd_project_motors WHERE project_id=?`)
       .bind(projectId).all<Row>();
-    const parts = await database.prepare(`SELECT id,part_no,name FROM npd_part_items
+    const parts = await database.prepare(`SELECT id,part_no,name,design_revision FROM npd_part_items
       WHERE project_id=? AND trim(inspection_requirement)!=''`).bind(projectId).all<Row>();
-    const inspections = await database.prepare(`SELECT motor_id,part_item_id,result
-      FROM npd_inspection_records WHERE project_id=?`).bind(projectId).all<Row>();
-    const missingMotors = motors.results.filter((motor) =>
-      !inspections.results.some((record) => record.motor_id === motor.id && !record.part_item_id),
-    );
-    const missingParts = parts.results.filter((part) =>
-      !inspections.results.some((record) => record.part_item_id === part.id),
-    );
+    const inspections = await database.prepare(`SELECT motor_id,part_item_id,result,
+      requirement_revision,created_at FROM npd_inspection_records
+      WHERE project_id=? ORDER BY created_at DESC`).bind(projectId).all<Row>();
+    const currentMotorRecords = motors.results.map((motor) => inspections.results.find((record) =>
+      record.motor_id === motor.id && !record.part_item_id &&
+      Number(record.requirement_revision || 1) === Number(motor.design_revision || 1),
+    ));
+    const currentPartRecords = parts.results.map((part) => inspections.results.find((record) =>
+      record.part_item_id === part.id &&
+      Number(record.requirement_revision || 1) === Number(part.design_revision || 1),
+    ));
+    const missingMotors = motors.results.filter((_, index) => !currentMotorRecords[index]);
+    const missingParts = parts.results.filter((_, index) => !currentPartRecords[index]);
     if (missingMotors.length || missingParts.length) {
       throw new Error(`质量记录未齐套：${[
         ...missingMotors.map((row) => row.model),
         ...missingParts.map((row) => `${row.part_no} ${row.name}`),
       ].join("、")}。`);
     }
-    if (inspections.results.some((record) => !["合格", "让步接收"].includes(String(record.result)))) {
-      throw new Error("存在不合格检验记录，质量阶段不能完成。");
+    if ([...currentMotorRecords, ...currentPartRecords].some((record) =>
+      record && !["合格", "让步接收"].includes(String(record.result)))) {
+      throw new Error("当前设计版次的最新检验结论不合格，质量阶段不能完成。");
     }
   }
 }
@@ -1755,28 +2226,40 @@ async function updateSpecialSheetProgress(
     total = rows.results.length;
     completed = rows.results.filter((row) => row.status === "completed").length;
   } else if (sheetCode === "verification") {
-    const motors = await database.prepare("SELECT id FROM npd_project_motors WHERE project_id=?")
+    const motors = await database.prepare(`SELECT id,design_revision FROM npd_project_motors
+      WHERE project_id=?`)
       .bind(projectId).all<Row>();
-    const reports = await database.prepare("SELECT DISTINCT motor_id FROM npd_test_reports WHERE project_id=?")
+    const reports = await database.prepare(`SELECT motor_id,requirement_revision
+      FROM npd_test_reports WHERE project_id=?`)
       .bind(projectId).all<Row>();
     total = motors.results.length;
-    completed = reports.results.length;
+    completed = motors.results.filter((motor) => reports.results.some((report) =>
+      report.motor_id === motor.id && Number(report.requirement_revision || 1) === Number(motor.design_revision || 1),
+    )).length;
   } else {
-    const motors = await database.prepare("SELECT id FROM npd_project_motors WHERE project_id=?")
+    const motors = await database.prepare(`SELECT id,design_revision FROM npd_project_motors
+      WHERE project_id=?`)
       .bind(projectId).all<Row>();
-    const parts = await database.prepare(`SELECT id FROM npd_part_items
+    const parts = await database.prepare(`SELECT id,design_revision FROM npd_part_items
       WHERE project_id=? AND trim(inspection_requirement)!=''`).bind(projectId).all<Row>();
     total = motors.results.length + parts.results.length;
-    const records = await database.prepare(`SELECT DISTINCT motor_id,part_item_id
+    const records = await database.prepare(`SELECT motor_id,part_item_id,requirement_revision
       FROM npd_inspection_records WHERE project_id=?`).bind(projectId).all<Row>();
-    completed = records.results.length;
+    completed = motors.results.filter((motor) => records.results.some((record) =>
+      record.motor_id === motor.id && !record.part_item_id &&
+      Number(record.requirement_revision || 1) === Number(motor.design_revision || 1),
+    )).length + parts.results.filter((part) => records.results.some((record) =>
+      record.part_item_id === part.id &&
+      Number(record.requirement_revision || 1) === Number(part.design_revision || 1),
+    )).length;
   }
   const progress = total ? Math.min(90, Math.round((completed / total) * 90)) : 0;
-  await database.prepare(`UPDATE npd_project_sheets SET status='in_progress',progress=?,
-    updated_by=?,updated_at=CURRENT_TIMESTAMP WHERE project_id=? AND code=?`).bind(
-    progress, userId, projectId, sheetCode,
-  ).run();
-  await recalculateProject(database, projectId);
+  await reviseProjectSheet(database, projectId, sheetCode, userId, {
+    action: sheetCode === "parts_plan" ? "确认节点状态" : sheetCode === "verification" ? "提交试验报告" : "提交检验记录",
+    summary: `当前版次齐套 ${completed}/${total}，阶段完成度 ${progress}%`,
+    reason: "新增或更新执行记录", status: "in_progress", progress,
+    snapshot: { completed, total },
+  }, true);
 }
 
 async function recalculateProject(database: D1Database, projectId: string) {
@@ -1794,7 +2277,7 @@ async function recalculateProject(database: D1Database, projectId: string) {
   const protectedStatus = existing?.status === "paused" || existing?.status === "cancelled";
   const status = protectedStatus ? existing?.status : completed ? "completed" : "active";
   await database.prepare(`UPDATE npd_projects SET progress=?,current_sheet_code=?,status=?,
-    actual_end=CASE WHEN ?='completed' THEN COALESCE(actual_end,?) ELSE actual_end END,
+    actual_end=CASE WHEN ?='completed' THEN COALESCE(actual_end,?) ELSE NULL END,
     updated_at=CURRENT_TIMESTAMP WHERE id=?`).bind(
       completed ? 100 : progress, String(current?.code || "change_archive"), status,
       status, currentDateIso(), projectId,
@@ -1841,13 +2324,13 @@ async function addActivity(
 
 function normalizeRole(value: unknown): NpdRole {
   const role = String(value || "sales");
-  return ["admin", "sales", "design", "production", "tester", "quality"].includes(role)
+  return ["admin", "sales", "design", "process", "procurement", "production", "tester", "quality"].includes(role)
     ? role as NpdRole
     : "sales";
 }
 
 function isNpdRole(value: unknown): value is NpdRole {
-  return ["admin", "sales", "design", "production", "tester", "quality"].includes(String(value));
+  return ["admin", "sales", "design", "process", "procurement", "production", "tester", "quality"].includes(String(value));
 }
 
 function normalizeEmail(value: unknown) {
@@ -1856,6 +2339,56 @@ function normalizeEmail(value: unknown) {
 
 function isValidAccountEmail(value: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function assertValidPassword(password: string) {
+  if (password.length < 8 || password.length > 128 || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+    throw new Error("本地登录密码需为 8～128 位，并同时包含字母和数字。");
+  }
+}
+
+async function createPasswordCredentials(password: string, existingSalt?: string) {
+  assertValidPassword(password);
+  const salt = existingSalt || randomHex(16);
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"],
+  );
+  const bits = await crypto.subtle.deriveBits({
+    name: "PBKDF2", hash: "SHA-256", iterations: 120_000,
+    salt: hexBytes(salt),
+  }, key, 256);
+  return { salt, hash: bytesHex(new Uint8Array(bits)) };
+}
+
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return bytesHex(new Uint8Array(digest));
+}
+
+function randomHex(length: number) {
+  return bytesHex(crypto.getRandomValues(new Uint8Array(length)));
+}
+
+function bytesHex(bytes: Uint8Array) {
+  return [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function hexBytes(value: string) {
+  if (!/^[0-9a-f]+$/i.test(value) || value.length % 2) throw new Error("本地账户凭据无效。");
+  return new Uint8Array(value.match(/.{2}/g)?.map((part) => Number.parseInt(part, 16)) || []);
+}
+
+function constantTimeEqual(left: string, right: string) {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index++) {
+    difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return difference === 0;
+}
+
+function sqliteTimestamp(date: Date) {
+  return date.toISOString().slice(0, 19).replace("T", " ");
 }
 
 function assertActive(user: NpdUser) {

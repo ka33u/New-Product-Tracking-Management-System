@@ -2,6 +2,8 @@ export type NpdRole =
   | "admin"
   | "sales"
   | "design"
+  | "process"
+  | "procurement"
   | "production"
   | "tester"
   | "quality";
@@ -91,7 +93,6 @@ export interface ProjectMotor {
   id: string;
   projectId: string;
   model: string;
-  motorCode: string;
   ratedPower: string;
   voltage: string;
   frequency: string;
@@ -99,7 +100,12 @@ export interface ProjectMotor {
   speed: string;
   frameSize: string;
   mounting: string;
+  terminalMode: string;
+  protectionGrade: string;
+  insulationClass: string;
+  coolingMethod: string;
   quantity: number;
+  designRevision: number;
   inspectionRequirement: string;
   testRequirement: string;
   plannedDate: string;
@@ -157,6 +163,22 @@ export interface ProjectSheet {
   updatedAt: string;
 }
 
+export interface SheetRevision {
+  id: string;
+  projectId: string;
+  sheetCode: SheetCode;
+  version: number;
+  action: string;
+  summary: string;
+  reason: string;
+  status: SheetStatus;
+  progress: number;
+  plannedDate: string;
+  actorId: string;
+  actorName: string;
+  createdAt: string;
+}
+
 export interface NpdFormRecord {
   id: string;
   projectId: string;
@@ -190,6 +212,7 @@ export interface PartItem {
   confirmedBy: string | null;
   confirmedByName: string;
   confirmedAt: string | null;
+  designRevision: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -210,6 +233,7 @@ export interface TestReport {
   fileName: string;
   submittedBy: string;
   submittedByName: string;
+  requirementRevision: number;
   createdAt: string;
 }
 
@@ -230,6 +254,7 @@ export interface InspectionRecord {
   fileName: string;
   inspectorId: string;
   inspectorName: string;
+  requirementRevision: number;
   createdAt: string;
 }
 
@@ -279,6 +304,7 @@ export interface NpdWorkspaceSnapshot {
   members: ProjectMember[];
   motors: ProjectMotor[];
   sheets: ProjectSheet[];
+  sheetRevisions: SheetRevision[];
   formRecords: NpdFormRecord[];
   parts: PartItem[];
   testReports: TestReport[];
@@ -292,6 +318,8 @@ export const roleLabels: Record<NpdRole, string> = {
   admin: "管理员",
   sales: "销售",
   design: "设计",
+  process: "工艺",
+  procurement: "采购",
   production: "生产",
   tester: "试验员",
   quality: "质量",

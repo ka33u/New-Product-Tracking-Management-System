@@ -30,12 +30,19 @@ function periodBounds(preference: DashboardPreference) {
 
 export function Dashboard({ snapshot, currentUser, onOpenProject, onSavePreference }: { snapshot: NpdWorkspaceSnapshot; currentUser: NpdUser; onOpenProject: (id: string) => void; onSavePreference: (value: DashboardPreference) => Promise<void> }) {
   const [preference, setPreference] = useState(snapshot.dashboardPreference);
+  const [ownerFilter, setOwnerFilter] = useState("all");
   const [showConfig, setShowConfig] = useState(false);
   const [busy, setBusy] = useState(false);
   const projects = useMemo(() => {
     const [start, end] = periodBounds(preference);
-    return snapshot.projects.filter((project) => project.plannedStart <= end && project.plannedEnd >= start);
-  }, [snapshot.projects, preference]);
+    return snapshot.projects.filter((project) =>
+      (ownerFilter === "all" || project.ownerId === ownerFilter) &&
+      project.plannedStart <= end && project.plannedEnd >= start,
+    );
+  }, [snapshot.projects, preference, ownerFilter]);
+  const owners = snapshot.users.filter((user) =>
+    snapshot.projects.some((project) => project.ownerId === user.id),
+  );
   const values: Record<string, number> = {
     total: projects.length,
     active: projects.filter((item) => item.status === "active").length,
@@ -56,10 +63,11 @@ export function Dashboard({ snapshot, currentUser, onOpenProject, onSavePreferen
     for (let i = 5; i >= 0; i--) {
       const date = new Date(base.getFullYear(), base.getMonth() - i, 1);
       const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-      months.push({ key, label: `${date.getMonth() + 1}月`, created: snapshot.projects.filter((item) => item.createdAt.startsWith(key)).length, completed: snapshot.projects.filter((item) => item.actualEnd?.startsWith(key)).length });
+      const scoped = snapshot.projects.filter((item) => ownerFilter === "all" || item.ownerId === ownerFilter);
+      months.push({ key, label: `${date.getMonth() + 1}月`, created: scoped.filter((item) => item.createdAt.startsWith(key)).length, completed: scoped.filter((item) => item.actualEnd?.startsWith(key)).length });
     }
     return months;
-  }, [snapshot.projects]);
+  }, [snapshot.projects, ownerFilter]);
   const maxMonth = Math.max(1, ...monthCounts.flatMap((item) => [item.created, item.completed]));
   const focus = [...projects].sort((a, b) => Number(b.overdueDays > 0) - Number(a.overdueDays > 0) || b.updatedAt.localeCompare(a.updatedAt)).slice(0, 6);
 
@@ -69,7 +77,7 @@ export function Dashboard({ snapshot, currentUser, onOpenProject, onSavePreferen
   };
 
   return <div className="npd2-page">
-    <div className="npd2-page-heading"><div><span className="npd2-eyebrow">全流程态势</span><h1>项目驾驶舱</h1><p>{currentUser.role === "admin" ? "全公司新品开发项目" : "我发起、负责或参与的项目"}，统计周期可按年、半年、月度或自定义区间切换。</p></div><div className="npd2-heading-actions"><PeriodControl value={preference} onChange={setPreference} /><button className="npd2-button npd2-button-soft" onClick={() => setShowConfig(true)}><Icon name="settings" />自定义看板</button></div></div>
+    <div className="npd2-page-heading"><div><span className="npd2-eyebrow">全流程态势</span><h1>项目驾驶舱</h1><p>{currentUser.role === "admin" ? "全公司新品开发项目" : "我发起、负责或参与的项目"}，统计周期与负责人筛选会同步作用于全部指标和图表。</p></div><div className="npd2-heading-actions"><label className="npd2-owner-filter"><span>项目负责人</span><select value={ownerFilter} onChange={(event) => setOwnerFilter(event.target.value)}><option value="all">全部负责人</option>{owners.map((user) => <option key={user.id} value={user.id}>{user.name} · {user.roleLabel}</option>)}</select></label><PeriodControl value={preference} onChange={setPreference} /><button className="npd2-button npd2-button-soft" onClick={() => setShowConfig(true)}><Icon name="settings" />自定义看板</button></div></div>
     <div className="npd2-metrics">{metricDefinitions.filter(([key]) => preference.visibleMetrics.includes(key)).map(([key, label, icon], index) => <article className={`npd2-metric npd2-metric-${index % 4}`} key={key}><div><span>{label}</span><strong>{values[key]}{key === "averageProgress" ? "%" : ""}</strong></div><i><Icon name={icon} /></i><small>{key === "overdue" && values[key] ? "需要立即跟进" : key === "completed" ? "已形成闭环" : "当前统计周期"}</small></article>)}</div>
     <div className="npd2-dashboard-grid">
       <article className="npd2-panel npd2-status-panel"><div className="npd2-panel-title"><div><h2>项目状态分布</h2><p>按项目当前生命周期状态统计</p></div></div><div className="npd2-donut-wrap"><div className="npd2-donut" style={{ background: projects.length ? `conic-gradient(${conic})` : "#e8edf2" }}><span><b>{projects.length}</b>个项目</span></div><div className="npd2-chart-legend">{statusItems.map((item) => <div key={item.status}><i style={{ background: colors[item.status] }} /><span>{projectStatusLabels[item.status as keyof typeof projectStatusLabels]}</span><b>{item.count}</b></div>)}</div></div></article>
