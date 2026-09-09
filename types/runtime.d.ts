@@ -24,12 +24,16 @@ interface R2PutOptions {
   customMetadata?: Record<string, string>;
 }
 
-interface R2ObjectBody {
-  body: ReadableStream<Uint8Array>;
+interface R2Object {
   key: string;
   size: number;
+  etag: string;
   httpMetadata?: { contentType?: string };
   customMetadata?: Record<string, string>;
+}
+
+interface R2ObjectBody extends R2Object {
+  body: ReadableStream<Uint8Array>;
 }
 
 interface R2Bucket {
@@ -39,11 +43,19 @@ interface R2Bucket {
     options?: R2PutOptions,
   ): Promise<unknown>;
   get(key: string): Promise<R2ObjectBody | null>;
+  get(key: string, options: { onlyIf: { etagMatches: string } }): Promise<R2ObjectBody | R2Object | null>;
+  head(key: string): Promise<R2Object | null>;
   delete(key: string): Promise<void>;
 }
 
 interface Fetcher {
   fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
+}
+
+declare class FixedLengthStream {
+  constructor(expectedLength: number | bigint);
+  readonly readable: ReadableStream<Uint8Array>;
+  readonly writable: WritableStream<Uint8Array>;
 }
 
 declare module "cloudflare:workers" {

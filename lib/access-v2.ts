@@ -96,6 +96,7 @@ export function canEditSheet(
   project: Pick<NpdProject, "initiatorId" | "ownerId" | "status">,
   sheetCode: SheetCode,
 ) {
+  if (project.status === "paused") return false;
   if (project.status === "completed" || project.status === "cancelled") {
     return user.role === "admin";
   }
@@ -121,6 +122,16 @@ export function canEditSheet(
     return true;
   }
   return user.role === "sales" && ["initiation", "customer_trial"].includes(sheetCode);
+}
+
+// Match getEditableProject(..., true): pausing does not prevent recovery or
+// ownership handoff, but closed projects are administered by admins only.
+export function canManageProjectLifecycle(
+  user: NpdUser,
+  project: Pick<NpdProject, "initiatorId" | "ownerId" | "status">,
+) {
+  return isProjectSteward(user, project) &&
+    (user.role === "admin" || !["completed", "cancelled"].includes(project.status));
 }
 
 export function assignableOwner(user: NpdUser) {

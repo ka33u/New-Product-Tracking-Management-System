@@ -8,6 +8,7 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     ".wrangler/**",
+    ".local-releases/**",
     "next-env.d.ts",
   ]),
   ...tseslint.configs.recommended,

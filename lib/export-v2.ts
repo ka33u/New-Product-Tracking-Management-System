@@ -1,4 +1,5 @@
 import { formDefinitions } from "./forms";
+import { workbook, worksheet } from "./xlsx-runtime";
 import type {
   InspectionRecord,
   NpdActivity,
@@ -17,17 +18,19 @@ import type {
   SheetRevision,
   TestReport,
 } from "./npd-v2";
-import { projectStatusLabels, roleLabels, sheetStatusLabels } from "./npd-v2";
+import { motorProductionLabel, projectStatusLabels, roleLabels, sheetStatusLabels } from "./npd-v2";
 import { sheetByCode, sheetDefinitions } from "./sheets-v2";
 
 export interface ProjectArchiveData {
+  capturedAt?: string;
+  exportedBy?: string;
   project: NpdProject;
   customer: NpdCustomer | null;
   orders: NpdSalesOrder[];
   members: ProjectMember[];
   motors: ProjectMotor[];
   sheets: ProjectSheet[];
-  revisions: SheetRevision[];
+  revisions: (SheetRevision & { snapshotJson?: string })[];
   forms: NpdFormRecord[];
   parts: PartItem[];
   tests: TestReport[];
@@ -38,43 +41,19 @@ export interface ProjectArchiveData {
 
 type Cell = string | number | boolean | null | undefined;
 
-const xmlEscape = (value: Cell) => String(value ?? "")
-  .replace(/&/g, "&amp;")
-  .replace(/</g, "&lt;")
-  .replace(/>/g, "&gt;")
-  .replace(/"/g, "&quot;")
-  .replace(/'/g, "&apos;");
-
 const htmlEscape = (value: Cell) => String(value ?? "")
   .replace(/&/g, "&amp;")
   .replace(/</g, "&lt;")
   .replace(/>/g, "&gt;")
   .replace(/"/g, "&quot;");
 
-const displayValue = (value: unknown) => {
-  if (Array.isArray(value)) return value.join("、");
+const displayValue = (value: unknown): string => {
+  if (Array.isArray(value)) return value.map(displayValue).join("、");
   if (typeof value === "boolean") return value ? "是" : "否";
   if (value == null) return "";
+  if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 };
-
-function worksheet(name: string, rows: Cell[][]) {
-  const safeName = name.replace(/[\\/?*\[\]:]/g, "-").slice(0, 31);
-  return `<Worksheet ss:Name="${xmlEscape(safeName)}"><Table>${rows.map((row, rowIndex) =>
-    `<Row>${row.map((cell) => {
-      const isNumber = typeof cell === "number" && Number.isFinite(cell);
-      return `<Cell${rowIndex === 0 ? ' ss:StyleID="Header"' : ""}><Data ss:Type="${isNumber ? "Number" : "String"}">${xmlEscape(cell)}</Data></Cell>`;
-    }).join("")}</Row>`,
-  ).join("")}</Table><WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel"><FreezePanes/><FrozenNoSplit/><SplitHorizontal>1</SplitHorizontal><TopRowBottomPane>1</TopRowBottomPane><ProtectObjects>False</ProtectObjects><ProtectScenarios>False</ProtectScenarios></WorksheetOptions></Worksheet>`;
-}
-
-function workbook(worksheets: string[]) {
-  return `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?>
-<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet">
-<DocumentProperties xmlns="urn:schemas-microsoft-com:office:office"><Author>亨达新品开发</Author><Created>${new Date().toISOString()}</Created></DocumentProperties>
-<Styles><Style ss:ID="Default" ss:Name="Normal"><Alignment ss:Vertical="Center" ss:WrapText="1"/><Font ss:FontName="Microsoft YaHei" ss:Size="10"/><Borders/><Interior/><NumberFormat/><Protection/></Style><Style ss:ID="Header"><Font ss:FontName="Microsoft YaHei" ss:Size="10" ss:Bold="1" ss:Color="#FFFFFF"/><Interior ss:Color="#163A5F" ss:Pattern="Solid"/><Alignment ss:Vertical="Center" ss:WrapText="1"/></Style></Styles>
-${worksheets.join("\n")}</Workbook>`;
-}
 
 function formRows(data: ProjectArchiveData) {
   const rows: Cell[][] = [["阶段 Sheet", "表单编号", "表单名称", "字段", "内容", "状态", "版本", "最后维护人", "最后更新时间"]];
@@ -100,7 +79,33 @@ function formRows(data: ProjectArchiveData) {
           record?.updatedAt || "",
         ]);
       }
+      for (const [key, value] of Object.entries(record?.payload || {})) {
+        if (fields.some((field) => field.key === key)) continue;
+        rows.push([sheet.shortTitle, formCode, definition?.name || formCode, `历史字段：${key}`, displayValue(value),
+          record?.status === "submitted" ? "已提交" : "草稿", record?.version || 0, record?.updatedByName || "", record?.updatedAt || ""]);
+      }
     }
+  }
+  return rows;
+}
+
+export function revisionSnapshotRows(data: ProjectArchiveData): Cell[][] {
+  const rows: Cell[][] = [["阶段", "版本", "分段序号", "分段总数", "历史数据JSON", "说明"]];
+  for (const revision of data.revisions) {
+    const content = revision.snapshotJson;
+    if (!content) {
+      rows.push([sheetByCode[revision.sheetCode].shortTitle, `V${revision.version}`, 0, 0, "", "此历史版本没有可用快照，不代表当时数据为空"]);
+      continue;
+    }
+    // Small, lossless Unicode chunks remain readable within Excel's maximum
+    // row height as well as its per-cell text limit.
+    const characters = [...content];
+    const count = Math.ceil(characters.length / 400);
+    for (let index = 0; index < count; index++) rows.push([
+      sheetByCode[revision.sheetCode].shortTitle, `V${revision.version}`, index + 1, count,
+      characters.slice(index * 400, (index + 1) * 400).join(""),
+      "同一阶段同一版本按分段序号拼接即为原始快照；新快照含六类业务明细，旧快照可能不完整。附件仅含索引。",
+    ]);
   }
   return rows;
 }
@@ -110,11 +115,11 @@ export function buildProjectExcel(data: ProjectArchiveData) {
   const sheets = [
     worksheet("项目概览", [
       ["项目编号", "项目名称", "系列", "客户", "发起人", "项目负责人", "状态", "风险", "进度", "规格数", "计划开始", "计划完成", "实际完成", "最后更新"],
-      [project.code, project.name, project.seriesName, project.customerName, project.initiatorName, project.ownerName, projectStatusLabels[project.status], project.riskLevel, `${project.progress}%`, project.motorCount, project.plannedStart, project.plannedEnd, project.actualEnd, project.updatedAt],
+      [project.code, project.name, project.seriesName, project.customerName, project.initiatorName, project.ownerName, projectStatusLabels[project.status], project.riskLevel, project.progress / 100, project.motorCount, project.plannedStart, project.plannedEnd, project.actualEnd, project.updatedAt],
     ]),
     worksheet("电机规格", [
-      ["型号规格", "设计版次", "功率", "电压", "频率", "极数", "转速", "机座号", "安装方式", "出线形式", "防护等级", "绝缘等级", "冷却方式", "数量", "检验要求", "试验要求", "计划节点", "实际完成", "状态", "更新时间"],
-      ...data.motors.map((motor) => [motor.model, `R${motor.designRevision}`, motor.ratedPower, motor.voltage, motor.frequency, motor.poles, motor.speed, motor.frameSize, motor.mounting, motor.terminalMode, motor.protectionGrade, motor.insulationClass, motor.coolingMethod, motor.quantity, motor.inspectionRequirement, motor.testRequirement, motor.plannedDate, motor.actualDate, motor.status, motor.updatedAt]),
+      ["型号规格", "设计版次", "功率", "电压", "频率", "极数", "转速", "机座号", "安装方式", "出线形式", "防护等级", "绝缘等级", "冷却方式", "数量", "检验要求", "试验要求", "计划节点", "实际完成", "状态", "更新时间", "生产确认人", "生产确认时间", "生产确认说明"],
+      ...data.motors.map((motor) => [motor.model, `R${motor.designRevision}`, motor.ratedPower, motor.voltage, motor.frequency, motor.poles, motor.speed, motor.frameSize, motor.mounting, motor.terminalMode, motor.protectionGrade, motor.insulationClass, motor.coolingMethod, motor.quantity, motor.inspectionRequirement, motor.testRequirement, motor.plannedDate, motor.actualDate, motorProductionLabel(motor), motor.updatedAt, motor.confirmedByName, motor.confirmedAt, motor.productionNote]),
     ]),
     worksheet("关联销售订单", [
       ["订单号", "客户", "产品概要", "数量", "金额", "币种", "订单日期", "交付日期", "状态", "录入人", "更新时间"],
@@ -122,7 +127,7 @@ export function buildProjectExcel(data: ProjectArchiveData) {
     ]),
     worksheet("阶段Sheet", [
       ["序号", "阶段", "责任角色", "状态", "进度", "计划日期", "实际日期", "版本", "备注", "最后维护人", "更新时间"],
-      ...data.sheets.map((sheet) => [sheet.sortOrder, sheet.title, sheet.ownerRoleLabel, sheetStatusLabels[sheet.status], `${sheet.progress}%`, sheet.plannedDate, sheet.actualDate, `V${sheet.version}`, sheet.note, sheet.updatedByName, sheet.updatedAt]),
+      ...data.sheets.map((sheet) => [sheet.sortOrder, sheet.title, sheet.ownerRoleLabel, sheetStatusLabels[sheet.status], sheet.progress / 100, sheet.plannedDate, sheet.actualDate, `V${sheet.version}`, sheet.note, sheet.updatedByName, sheet.updatedAt]),
     ]),
     worksheet("受控表单明细", formRows(data)),
     worksheet("零部件节点", [
@@ -139,8 +144,9 @@ export function buildProjectExcel(data: ProjectArchiveData) {
     ]),
     worksheet("阶段版本记录", [
       ["阶段", "版本", "动作", "摘要", "变更原因", "状态", "进度", "计划日期", "操作人", "时间戳"],
-      ...data.revisions.map((revision) => [sheetByCode[revision.sheetCode].shortTitle, `V${revision.version}`, revision.action, revision.summary, revision.reason, sheetStatusLabels[revision.status], `${revision.progress}%`, revision.plannedDate, revision.actorName, revision.createdAt]),
+      ...data.revisions.map((revision) => [sheetByCode[revision.sheetCode].shortTitle, `V${revision.version}`, revision.action, revision.summary, revision.reason, sheetStatusLabels[revision.status], revision.progress / 100, revision.plannedDate, revision.actorName, revision.createdAt]),
     ]),
+    worksheet("版本数据快照", revisionSnapshotRows(data)),
     worksheet("项目成员", [
       ["姓名", "角色", "职责", "加入时间"],
       ...data.members.map((member) => [member.userName, member.roleLabel, member.responsibility, member.createdAt]),
@@ -153,6 +159,8 @@ export function buildProjectExcel(data: ProjectArchiveData) {
       ["时间戳", "操作人", "操作", "对象类型", "详细内容"],
       ...data.activities.map((activity) => [activity.createdAt, activity.actorName, activity.action, activity.entityType, activity.detail]),
     ]),
+    worksheet("导出说明", [["项目编号", "导出时间", "时间口径", "附件范围"],
+      [project.code, new Date().toISOString(), "时间戳按北京时间显示；计划和业务日期不换算时区", "仅附件索引，不包含附件原件；原件请从项目下载并另行归档"]]),
   ];
   return workbook(sheets);
 }
@@ -161,13 +169,13 @@ export function buildPortfolioExcel(snapshot: NpdWorkspaceSnapshot, currentUser:
   return workbook([
     worksheet("项目总览", [
       ["项目编号", "项目名称", "系列", "客户", "发起人", "负责人", "当前阶段", "状态", "风险", "进度", "规格数", "计划开始", "计划完成", "逾期天数", "最后更新"],
-      ...snapshot.projects.map((project) => [project.code, project.name, project.seriesName, project.customerName, project.initiatorName, project.ownerName, project.currentSheetTitle, projectStatusLabels[project.status], project.riskLevel, `${project.progress}%`, project.motorCount, project.plannedStart, project.plannedEnd, project.overdueDays, project.updatedAt]),
+      ...snapshot.projects.map((project) => [project.code, project.name, project.seriesName, project.customerName, project.initiatorName, project.ownerName, project.currentSheetTitle, projectStatusLabels[project.status], project.riskLevel, project.progress / 100, project.motorCount, project.plannedStart, project.plannedEnd, project.overdueDays, project.updatedAt]),
     ]),
     worksheet("阶段进度", [
       ["项目编号", "项目名称", "阶段", "责任角色", "状态", "进度", "计划日期", "更新时间"],
       ...snapshot.sheets.map((sheet) => {
         const project = snapshot.projects.find((row) => row.id === sheet.projectId);
-        return [project?.code || "", project?.name || "", sheet.title, sheet.ownerRoleLabel, sheetStatusLabels[sheet.status], `${sheet.progress}%`, sheet.plannedDate, sheet.updatedAt];
+        return [project?.code || "", project?.name || "", sheet.title, sheet.ownerRoleLabel, sheetStatusLabels[sheet.status], sheet.progress / 100, sheet.plannedDate, sheet.updatedAt];
       }),
     ]),
     worksheet("销售订单", [
@@ -175,8 +183,8 @@ export function buildPortfolioExcel(snapshot: NpdWorkspaceSnapshot, currentUser:
       ...snapshot.orders.map((order) => [order.orderNo, order.customerName, order.productSummary, order.quantity, order.amount, order.currency, order.orderDate, order.deliveryDate, order.projectCode || "未关联", order.status]),
     ]),
     worksheet("导出说明", [
-      ["导出人", "角色", "导出时间", "数据范围"],
-      [currentUser.name, roleLabels[currentUser.role], new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" }), currentUser.role === "admin" ? "全部项目" : "本人发起、负责或参与的项目"],
+      ["导出人", "角色", "导出时间", "数据范围", "时间口径"],
+      [currentUser.name, roleLabels[currentUser.role], new Date().toISOString(), currentUser.role === "admin" ? "全部项目（不应用页面筛选）" : "本人发起、负责或参与的项目（不应用页面筛选）", "时间戳按北京时间显示；计划和业务日期不换算时区"],
     ]),
   ]);
 }

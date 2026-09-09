@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { requireNpdRequestUser } from "../../request-user";
+import { authenticationRequiredResponse } from "../../../lib/auth-required";
+import { checkWorkspaceActor } from "../../../lib/workspace-identity";
+import { isLocalNpdMode, requireNpdRequestUser } from "../../request-user";
+import { isSameOriginMutation } from "../../../lib/request-security";
 import {
   getNpdRuntimeEnv,
   insertNpdDocument,
@@ -10,9 +13,16 @@ import { sheetByCode } from "../../../lib/sheets-v2";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  if (isLocalNpdMode() && !isSameOriginMutation(request)) {
+    return NextResponse.json({ error: "请从本系统页面上传文件。" }, { status: 403 });
+  }
   let objectKey = "";
   try {
     const currentUser = await requireNpdRequestUser();
+    if (isLocalNpdMode()) {
+      const conflict = checkWorkspaceActor(request, currentUser.id);
+      if (conflict) return conflict;
+    }
     const formData = await request.formData();
     const file = formData.get("file");
     const projectId = String(formData.get("projectId") || "").trim();
@@ -66,6 +76,8 @@ export async function POST(request: Request) {
     );
     return NextResponse.json({ ok: true, id });
   } catch (error) {
+    const authResponse = authenticationRequiredResponse(error);
+    if (authResponse) return authResponse;
     if (objectKey) {
       try {
         await getNpdRuntimeEnv().FILES?.delete(objectKey);

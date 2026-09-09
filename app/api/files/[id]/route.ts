@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { authenticationRequiredResponse } from "../../../../lib/auth-required";
 import { requireNpdRequestUser } from "../../../request-user";
 import {
   getNpdDocument,
@@ -32,6 +33,8 @@ export async function GET(
       },
     });
   } catch (error) {
+    const authResponse = authenticationRequiredResponse(error);
+    if (authResponse) return authResponse;
     const message = error instanceof Error ? error.message : "文件读取失败。";
     return NextResponse.json(
       { error: message },

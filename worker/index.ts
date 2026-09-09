@@ -1,8 +1,10 @@
 /** Cloudflare Worker entry point for the vinext-starter template. */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
+import { isSameOriginMutation } from "../lib/request-security";
 
 interface Env {
+  NPD_AUTH_MODE?: string;
   ASSETS: Fetcher;
   DB: D1Database;
   FILES: R2Bucket;
@@ -28,6 +30,12 @@ interface ExecutionContext {
 
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    // Check before the framework dispatches form-like POSTs as server actions.
+    // This also covers local non-API mutation routes without loosening the
+    // framework's existing CSRF configuration.
+    if (env.NPD_AUTH_MODE === "local" && !["GET", "HEAD", "OPTIONS"].includes(request.method) && !isSameOriginMutation(request)) {
+      return Response.json({ error: "请从本系统页面提交操作。" }, { status: 403, headers: { "Cache-Control": "no-store" } });
+    }
     const url = new URL(request.url);
 
     if (url.pathname === "/_vinext/image") {

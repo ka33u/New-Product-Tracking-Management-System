@@ -279,3 +279,70 @@ export const formDefinitions: FormDefinition[] = [
 export const formDefinitionMap = new Map(
   formDefinitions.map((definition) => [definition.code, definition]),
 );
+
+function isCalendarDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+/** Drafts may be incomplete; submitted records must match the controlled fields.
+ * Unknown historical fields are retained, not silently removed or reinterpreted. */
+export function formSubmissionIssues(definition: FormDefinition, input: unknown): string[] {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return ["表单内容必须是字段记录"];
+  const payload = input as Record<string, unknown>;
+  const issues: string[] = [];
+  for (const field of definition.fields) {
+    const value = payload[field.key];
+    const empty = value === undefined || value === null || (typeof value === "string" && !value.trim()) ||
+      (field.type === "multiselect" && Array.isArray(value) && value.length === 0);
+    if (empty) { if (field.required) issues.push(`${field.label}未填写`); continue; }
+    if (field.type === "number") {
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) issues.push(`${field.label}须为非负有效数字`);
+      else if (field.key === "sampleQuantity" && (!Number.isSafeInteger(value) || value < 1)) issues.push(`${field.label}须为正整数`);
+    } else if (field.type === "date") {
+      if (!isCalendarDate(value)) issues.push(`${field.label}须为有效日期`);
+    } else if (field.type === "checkbox") {
+      if (typeof value !== "boolean" || (field.required && !value)) issues.push(`${field.label}须明确确认`);
+    } else if (field.type === "multiselect") {
+      if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !field.options?.includes(item)) || new Set(value).size !== value.length) {
+        issues.push(`${field.label}须选择有效且不重复的选项`);
+      }
+    } else if (field.type === "select") {
+      if (typeof value !== "string" || !field.options?.includes(value)) issues.push(`${field.label}须选择有效选项`);
+    } else if (typeof value !== "string") issues.push(`${field.label}须为文字内容`);
+  }
+  const chronology = definition.code === "HD/JL-SJ-01A1" ? ["initiationDate", "requiredDate", "要求开发完成时间不能早于立项日期"]
+    : definition.code === "HD/JL-SJ-03A1" ? ["listedDate", "completionDate", "计划完成时间不能早于列入时间"] : null;
+  if (chronology && isCalendarDate(payload[chronology[0]]) && isCalendarDate(payload[chronology[1]]) &&
+    String(payload[chronology[0]]) > String(payload[chronology[1]])) issues.push(chronology[2]);
+  return issues;
+}
+
+/** Submission preserves adverse decisions; only stage release applies these gates.
+ * Closure text is a human attestation, not an automated judgment of technical adequacy. */
+export function formReleaseIssues(definition: FormDefinition, input: unknown): string[] {
+  const issues = formSubmissionIssues(definition, input);
+  if (issues.length) return issues;
+  const payload = input as Record<string, unknown>;
+  const has = (key: string) => typeof payload[key] === "string" && Boolean(String(payload[key]).trim());
+  if (definition.code === "HD/JL-SJ-05A1") {
+    if (payload.conclusion === "不通过") issues.push("评审结论为不通过，须整改并提交新的评审结论后再放行");
+    if (payload.conclusion === "有条件通过" && (!has("trackingResult") || !has("verifier") || !isCalendarDate(payload.verifyDate))) {
+      issues.push("有条件通过须补充纠正/改进措施跟踪验证结果、验证人和验证日期，再复核放行");
+    }
+  }
+  if (definition.code === "HD/JL-SJ-06A1") {
+    if (payload.conclusion === "不通过") issues.push("设计开发验证结论为不通过，须整改并提交新的验证结论后再放行");
+    if (payload.conclusion === "有条件通过" && !has("followUp")) issues.push("有条件通过须补充验证结论跟踪结果，再复核放行");
+  }
+  if (definition.code === "HD/JL-SJ-08A1") {
+    if (payload.massProductionOpinion === "不同意") issues.push("批量生产意见为不同意，须重新鉴定并提交新结论后再放行");
+    if (payload.massProductionOpinion === "整改后批量生产" && !has("correctiveActions")) issues.push("整改后批量生产须补充纠正措施跟踪及验证，再复核放行");
+  }
+  if (definition.code === "HD/JL-SJ-10A1") {
+    if (payload.technicalConclusion === "不通过") issues.push("项目技术性确认结论为不通过，须整改并提交新结论后再放行");
+    if (payload.technicalConclusion === "整改后确认" && !has("reviewSummary")) issues.push("整改后确认须在评审意见汇总及采纳情况中记录整改确认依据，再复核放行");
+  }
+  return issues;
+}

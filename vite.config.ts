@@ -2,6 +2,8 @@ import vinext from "vinext";
 import { defineConfig } from "vite";
 import hostingConfig from "./.openai/hosting.json";
 import { sites } from "./build/sites-vite-plugin";
+import { fileURLToPath } from "node:url";
+import { disableTypes } from "image-size";
 
 const SITE_CREATOR_PLACEHOLDER_DATABASE_ID =
   "00000000-0000-4000-8000-000000000000";
@@ -12,6 +14,7 @@ const { d1, r2 } = hostingConfig;
 const isCodexSeatbeltSandbox = process.env.CODEX_SANDBOX === "seatbelt";
 
 const localBindingConfig = {
+  vars: { NPD_AUTH_MODE: "local" },
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
   d1_databases: d1
@@ -34,6 +37,9 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
+  // Build-time mitigation only: keep known-vulnerable container decoders out
+  // of metadata/image-import parsing. This does not change R2 attachments.
+  disableTypes(["icns", "heif", "jxl", "jxl-stream"]);
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
@@ -48,6 +54,17 @@ export default defineConfig(async () => {
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,
     plugins: [
+      {
+        name: "npd-xlsx-workerless-zip",
+        enforce: "pre",
+        // Limit the adapter to write-excel-file's ZIP implementation. Other
+        // dependencies keep their own compression and worker behaviour.
+        resolveId(source: string, importer: string | undefined) {
+          if (source === "../zip/zipToArrayBuffer.js" && importer?.replaceAll("\\", "/").endsWith("/write-excel-file/modules/export/writeXlsxFileUniversal.js")) {
+            return fileURLToPath(new URL("./lib/xlsx-zip.ts", import.meta.url));
+          }
+        },
+      },
       vinext(),
       sites(),
       cloudflare({

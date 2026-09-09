@@ -1,0 +1,1 @@
+ALTER TABLE `npd_projects` ADD `ownership_version` integer DEFAULT 1 NOT NULL;

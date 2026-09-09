@@ -45,6 +45,7 @@ export interface NpdUser {
   roleLabel: string;
   active: boolean;
   avatar: string;
+  version: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -60,6 +61,7 @@ export interface NpdCustomer {
 
 export interface NpdSalesOrder {
   id: string;
+  version: number;
   orderNo: string;
   customerId: string;
   customerName: string;
@@ -80,6 +82,7 @@ export interface NpdSalesOrder {
 
 export interface ProjectMember {
   id: string;
+  version: number;
   projectId: string;
   userId: string;
   userName: string;
@@ -110,9 +113,26 @@ export interface ProjectMotor {
   testRequirement: string;
   plannedDate: string;
   actualDate: string | null;
+  confirmedBy: string | null;
+  confirmedByName: string | null;
+  confirmedAt: string | null;
+  productionNote: string;
   status: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export function motorProductionLabel(motor: Pick<ProjectMotor, "status" | "confirmedBy" | "confirmedAt" | "actualDate">) {
+  if (motor.status === "completed" && (!motor.confirmedBy || !motor.confirmedAt || !motor.actualDate)) return "历史完工 · 待生产复核";
+  return ({ planned: "计划中", in_progress: "生产中", completed: "生产已完成", blocked: "生产受阻" } as Record<string, string>)[motor.status] || motor.status;
+}
+
+export function partStatusLabel(status: string) {
+  return ({ planned: "计划中", in_progress: "进行中", completed: "已完成", blocked: "受阻" } as Record<string, string>)[status] || status;
+}
+
+export function documentKindLabel(kind: string) {
+  return ({ test_report: "试验报告", inspection_record: "检验记录", stage_attachment: "阶段附件", attachment: "附件" } as Record<string, string>)[kind] || kind;
 }
 
 export interface NpdProject {
@@ -129,6 +149,8 @@ export interface NpdProject {
   ownerId: string;
   ownerName: string;
   status: ProjectStatus;
+  lifecycleVersion: number;
+  ownershipVersion: number;
   riskLevel: RiskLevel;
   currentSheetCode: SheetCode;
   currentSheetTitle: string;

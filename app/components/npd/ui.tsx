@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -31,13 +31,102 @@ export function Icon({ name, size = 18 }: { name: string; size?: number }) {
   return <svg className="npd2-icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name] || paths.file}</svg>;
 }
 
-export function Modal({ title, eyebrow, children, onClose, wide = false }: { title: string; eyebrow?: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
-  return <div className="npd2-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-    <section className={`npd2-modal ${wide ? "npd2-modal-wide" : ""}`} role="dialog" aria-modal="true" aria-label={title}>
-      <header><div>{eyebrow && <span className="npd2-eyebrow">{eyebrow}</span>}<h2>{title}</h2></div><button className="npd2-icon-button" onClick={onClose} aria-label="关闭"><Icon name="close" /></button></header>
-      <div className="npd2-modal-body">{children}</div>
+const ModalCloseContext = createContext<{ requestClose: () => void; busy: boolean } | null>(null);
+
+export function Modal({ title, eyebrow, children, onClose, wide = false, protectChanges = false, busy = false }: {
+  title: string; eyebrow?: string; children: ReactNode; onClose: () => void; wide?: boolean; protectChanges?: boolean; busy?: boolean;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const continueButton = useRef<HTMLButtonElement>(null);
+  const previousFocus = useRef<HTMLElement | null>(null);
+  const editorFocus = useRef<HTMLElement | null>(null);
+  const wasBusy = useRef(false);
+  const backdropPress = useRef(false);
+  const [edited, setEdited] = useState(false);
+  const [confirmLeave, setConfirmLeave] = useState(false);
+  useEffect(() => {
+    const element = dialog.current!;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const overflow = document.body.style.overflow;
+    element.showModal();
+    heading.current?.focus({ preventScroll: true });
+    document.body.style.overflow = "hidden";
+    return () => {
+      element.close();
+      document.body.style.overflow = overflow;
+      if (opener?.isConnected) opener.focus({ preventScroll: true });
+    };
+  }, []);
+  useEffect(() => {
+    if (!busy && !(protectChanges && edited)) return;
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [busy, protectChanges, edited]);
+  useEffect(() => { if (confirmLeave) continueButton.current?.focus(); }, [confirmLeave]);
+  useEffect(() => {
+    if (busy) heading.current?.focus({ preventScroll: true });
+    else if (wasBusy.current && !confirmLeave) {
+      const target = editorFocus.current;
+      if (target?.isConnected && dialog.current?.contains(target)) target.focus({ preventScroll: true });
+      else heading.current?.focus({ preventScroll: true });
+    }
+    wasBusy.current = busy;
+  }, [busy, confirmLeave]);
+  const resume = () => {
+    setConfirmLeave(false);
+    // Wait for React to make the retained form interactive again.
+    requestAnimationFrame(() => {
+      const target = previousFocus.current;
+      if (target?.isConnected && dialog.current?.contains(target)) target.focus({ preventScroll: true });
+      else heading.current?.focus({ preventScroll: true });
+    });
+  };
+  const requestClose = () => {
+    if (busy) return;
+    if (protectChanges && edited) {
+      previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      setConfirmLeave(true);
+    } else onClose();
+  };
+  const markEdited = () => { if (protectChanges) setEdited(true); };
+  return <dialog ref={dialog} className="npd2-modal-backdrop" role="dialog" aria-modal="true" aria-label={title} aria-busy={busy}
+    onKeyDown={(event) => {
+      if (event.key !== "Tab") return;
+      const focusable = [...event.currentTarget.querySelectorAll<HTMLElement>("a[href],button,input,select,textarea,[tabindex],summary")]
+        .filter((item) => item.tabIndex >= 0 && !item.matches(":disabled") && !item.closest("[inert],[hidden]") && item.getClientRects().length > 0);
+      const first = focusable[0], last = focusable.at(-1), current = document.activeElement;
+      if (!first) { event.preventDefault(); heading.current?.focus(); }
+      else if (event.shiftKey && (current === first || !focusable.includes(current as HTMLElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (current === last || !focusable.includes(current as HTMLElement))) { event.preventDefault(); first.focus(); }
+    }}
+    onCancel={(event) => { event.preventDefault(); if (confirmLeave) resume(); else requestClose(); }}
+    onPointerDown={(event) => { backdropPress.current = event.target === event.currentTarget; }}
+    onClick={(event) => {
+      if (backdropPress.current && event.target === event.currentTarget && !confirmLeave) requestClose();
+      backdropPress.current = false;
+    }}>
+    <section className={`npd2-modal ${wide ? "npd2-modal-wide" : ""}`}>
+      <header><div>{eyebrow && <span className="npd2-eyebrow">{eyebrow}</span>}<h2 ref={heading} tabIndex={-1}>{title}</h2></div><button type="button" className="npd2-icon-button" onClick={requestClose} disabled={busy || confirmLeave} aria-label="关闭"><Icon name="close" /></button></header>
+      {busy && <p className="npd2-modal-saving" role="status">正在保存，请等待结果。当前窗口暂不能关闭。</p>}
+      {confirmLeave && <div className="npd2-modal-body" role="alertdialog" aria-label="放弃未保存的修改？">
+        <h3>放弃未保存的修改？</h3><p>此窗口有过编辑操作。离开将丢弃尚未保存的内容；已经保存的记录不会删除。</p>
+        <div className="npd2-submit-bar"><button ref={continueButton} type="button" className="npd2-button npd2-button-primary" onClick={resume}>继续编辑</button>
+          <button type="button" className="npd2-button npd2-button-ghost" onClick={onClose}>放弃修改并关闭</button></div>
+      </div>}
+      <div className="npd2-modal-body" hidden={confirmLeave} inert={busy || confirmLeave} onInputCapture={markEdited} onChangeCapture={markEdited}
+        onFocusCapture={(event) => { if (event.target instanceof HTMLElement) editorFocus.current = event.target; }}
+        onClickCapture={(event) => { if (event.target instanceof Element && event.target.closest("[data-npd-edit]")) markEdited(); }}>
+        <ModalCloseContext.Provider value={{ requestClose, busy }}>{children}</ModalCloseContext.Provider>
+      </div>
     </section>
-  </div>;
+  </dialog>;
+}
+
+export function ModalCancelButton({ onCancel, busy = false }: { onCancel: () => void; busy?: boolean }) {
+  const modal = useContext(ModalCloseContext);
+  return <button type="button" className="npd2-button npd2-button-ghost" disabled={busy || modal?.busy} onClick={modal?.requestClose || onCancel}>取消</button>;
 }
 
 export function StatusBadge({ value, label }: { value: string; label: string }) {
@@ -56,14 +145,25 @@ export function Field({ label, required, hint, children, full = false }: { label
   return <label className={`npd2-field ${full ? "npd2-field-full" : ""}`}><span>{label}{required && <b> *</b>}</span>{children}{hint && <small>{hint}</small>}</label>;
 }
 
-export function SubmitBar({ busy, onCancel, primary = "保存", secondary, onSecondary }: { busy: boolean; onCancel: () => void; primary?: string; secondary?: string; onSecondary?: () => void }) {
-  return <div className="npd2-submit-bar"><button type="button" className="npd2-button npd2-button-ghost" onClick={onCancel}>取消</button>{secondary && <button type="button" className="npd2-button npd2-button-soft" disabled={busy} onClick={onSecondary}>{secondary}</button>}<button type="submit" className="npd2-button npd2-button-primary" disabled={busy}>{busy ? "处理中…" : primary}</button></div>;
+export function SubmitBar({ busy, disabled = false, onCancel, primary = "保存", secondary, onSecondary }: { busy: boolean; disabled?: boolean; onCancel: () => void; primary?: string; secondary?: string; onSecondary?: () => void }) {
+  return <div className="npd2-submit-bar"><ModalCancelButton busy={busy} onCancel={onCancel} />{secondary && <button type="button" className="npd2-button npd2-button-soft" disabled={busy} onClick={onSecondary}>{secondary}</button>}<button type="submit" className="npd2-button npd2-button-primary" disabled={busy || disabled}>{busy ? "处理中…" : primary}</button></div>;
 }
 
-export const formatDate = (value: string | null | undefined) => value ? value.slice(0, 10) : "—";
-export const formatDateTime = (value: string | null | undefined) => value ? value.replace("T", " ").replace(/\.\d+Z$/, "").slice(0, 16) : "—";
-export const today = () => new Date().toISOString().slice(0, 10);
-export const addDays = (days: number) => { const date = new Date(); date.setDate(date.getDate() + days); return date.toISOString().slice(0, 10); };
+// SQLite CURRENT_TIMESTAMP is UTC despite having no timezone suffix. Render
+// audit timestamps in the same business timezone as the dashboard, on both SSR
+// and clients; the viewer's computer timezone must not change the audit display.
+export function formatDateTime(value: string | null | undefined): string {
+  if (!value) return "—";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const normalized = value.trim().replace(" ", "T");
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/i.test(normalized)) return "—";
+  const instant = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(normalized) ? normalized : `${normalized}Z`);
+  if (!Number.isFinite(instant.getTime())) return "—";
+  return new Date(instant.getTime() + 8 * 60 * 60 * 1000).toISOString().replace("T", " ").slice(0, 16);
+}
+export const formatDate = (value: string | null | undefined) => formatDateTime(value).slice(0, 10);
+export const today = () => formatDate(new Date().toISOString());
+export const addDays = (days: number) => formatDate(new Date(Date.now() + days * 86_400_000).toISOString());
 
 export function getFormObject(form: HTMLFormElement) {
   return Object.fromEntries(new FormData(form).entries());

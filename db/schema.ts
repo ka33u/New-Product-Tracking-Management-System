@@ -252,6 +252,7 @@ export const npdUsers = sqliteTable("npd_users", {
   passwordSalt: text("password_salt"),
   passwordHash: text("password_hash"),
   lastLoginAt: text("last_login_at"),
+  version: integer("version").notNull().default(1),
   ...timestamps,
 });
 
@@ -293,6 +294,8 @@ export const npdProjects = sqliteTable("npd_projects", {
     .references(() => npdUsers.id),
   status: text("status").notNull().default("draft"),
   riskLevel: text("risk_level").notNull().default("low"),
+  lifecycleVersion: integer("lifecycle_version").notNull().default(1),
+  ownershipVersion: integer("ownership_version").notNull().default(1),
   currentSheetCode: text("current_sheet_code").notNull().default("initiation"),
   progress: integer("progress").notNull().default(0),
   plannedStart: text("planned_start").notNull(),
@@ -309,6 +312,7 @@ export const npdProjects = sqliteTable("npd_projects", {
 
 export const npdSalesOrders = sqliteTable("npd_sales_orders", {
   id: text("id").primaryKey(),
+  version: integer("version").notNull().default(1),
   orderNo: text("order_no").notNull().unique(),
   customerId: text("customer_id")
     .notNull()
@@ -332,6 +336,7 @@ export const npdSalesOrders = sqliteTable("npd_sales_orders", {
 
 export const npdProjectMembers = sqliteTable("npd_project_members", {
   id: text("id").primaryKey(),
+  version: integer("version").notNull().default(1),
   projectId: text("project_id")
     .notNull()
     .references(() => npdProjects.id),
@@ -369,6 +374,9 @@ export const npdProjectMotors = sqliteTable("npd_project_motors", {
   testRequirement: text("test_requirement").notNull().default(""),
   plannedDate: text("planned_date").notNull(),
   actualDate: text("actual_date"),
+  confirmedBy: text("confirmed_by").references(() => npdUsers.id),
+  confirmedAt: text("confirmed_at"),
+  productionNote: text("production_note").notNull().default(""),
   status: text("status").notNull().default("planned"),
   ...timestamps,
 }, (table) => [
@@ -572,3 +580,10 @@ export const npdDashboardPreferences = sqliteTable("npd_dashboard_preferences", 
   payload: text("payload").notNull().default("{}"),
   ...timestamps,
 });
+
+// Short-lived, hashed login-attempt buckets; not business or password records.
+export const npdLocalLoginLimits = sqliteTable("npd_local_login_limits", {
+  bucket: text("bucket").primaryKey(),
+  windowStartedAt: integer("window_started_at").notNull(),
+  attemptCount: integer("attempt_count").notNull(),
+}, (table) => [index("idx_npd_login_limits_expiry").on(table.windowStartedAt)]);

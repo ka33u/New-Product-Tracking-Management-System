@@ -3,24 +3,69 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.16.0"
   },
   "scripts": {
-    "dev": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
+    "dev": "node scripts/local-migrations.mjs && WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext dev",
     "build": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext build",
     "start": "WRANGLER_LOG_PATH=.wrangler/wrangler.log vinext start",
-    "test": "npm run build && node --test tests/rendered-html.test.mjs && npm run test:store",
-    "test:store": "node --experimental-vm-modules tests/store-integration.mjs",
+    "start:local": "node scripts/local-server.mjs",
+    "release:local": "node scripts/local-release.mjs",
+    "test:local-release": "node --test tests/local-release.test.mjs",
+    "test:local-release-runtime": "node tests/local-release-runtime.mjs",
+    "test": "npm run test:migration-tooling && npm run test:image-policy-runtime && npm run build && node --test tests/project-controls-render.test.mjs tests/modal-safety.test.mjs tests/stage-upload.test.mjs tests/evidence-dialogs.test.mjs tests/workspace-identity.test.mjs tests/auth-required.test.mjs tests/rendered-html.test.mjs tests/revision-view.test.mjs tests/revision-values-render.test.mjs tests/readonly-form.test.mjs tests/evidence-checks.test.mjs tests/audit-dependencies.test.mjs tests/request-security.test.mjs tests/login-request.test.mjs tests/local-account-migration.test.mjs tests/dashboard-model.test.mjs tests/dashboard-render.test.mjs tests/stage-assignment.test.mjs tests/workspace-response.test.mjs tests/task-model.test.mjs tests/project-bundle.test.mjs && npm run test:store && npm run test:transactions && npm run test:clean && npm run test:export && npm run test:backup && npm run test:login-security",
+    "test:migration-tooling": "node tests/migration-tooling.mjs",
+    "test:image-policy-runtime": "node tests/image-policy-runtime.mjs",
+    "test:login-security": "node --experimental-vm-modules tests/local-login-security.mjs",
+    "test:login-security-runtime": "node --experimental-vm-modules tests/local-login-security-runtime.mjs",
+    "test:clean": "node --experimental-vm-modules tests/clean-deployment.mjs",
+    "test:clean-runtime": "node --experimental-vm-modules tests/clean-deployment-runtime.mjs",
+    "test:production-runtime": "node tests/local-production-runtime.mjs",
+    "test:export": "node --experimental-vm-modules tests/export-xlsx.mjs && npm run test:word",
+    "test:word": "node --experimental-vm-modules tests/export-docx.mjs",
+    "test:store": "node --experimental-vm-modules tests/store-integration.mjs && npm run test:archive-snapshot && npm run test:stage-originals && npm run test:collaboration-versions && npm run test:activity-scope",
+    "test:activity-scope": "node --experimental-vm-modules tests/activity-scope.mjs",
+    "test:activity-scope-runtime": "node --experimental-vm-modules tests/activity-scope-runtime.mjs",
+    "test:collaboration-versions": "node --test tests/collaboration-migration.test.mjs && node --experimental-vm-modules tests/collaboration-versions.mjs",
+    "test:collaboration-versions-runtime": "node --experimental-vm-modules tests/collaboration-versions-runtime.mjs",
+    "test:archive-snapshot": "node --experimental-vm-modules tests/archive-snapshot.mjs && npm run test:workspace-history",
+    "test:workspace-history": "node --experimental-vm-modules tests/workspace-history.mjs",
+    "test:workspace-scale-runtime": "node tests/workspace-scale-runtime.mjs",
+    "test:archive-snapshot-runtime": "node --experimental-vm-modules tests/archive-snapshot-runtime.mjs",
+    "test:stage-originals": "node --experimental-vm-modules tests/stage-originals.mjs",
+    "test:stage-originals-runtime": "node --experimental-vm-modules tests/stage-originals-runtime.mjs",
+    "test:transactions": "node --experimental-vm-modules tests/revision-transactions.mjs && npm run test:project-lifecycle && npm run test:project-ownership && npm run test:design-progress && npm run test:form-release",
+    "test:form-release": "node --test tests/form-validation.test.mjs && node --experimental-vm-modules tests/form-release.mjs && npm run test:motor-production",
+    "test:motor-production": "node --test tests/motor-production-migration.test.mjs tests/motor-production-render.test.mjs && node --experimental-vm-modules tests/motor-production.mjs",
+    "test:motor-production-runtime": "node --experimental-vm-modules tests/motor-production-runtime.mjs",
+    "test:form-release-runtime": "node --experimental-vm-modules tests/form-release-runtime.mjs",
+    "test:design-progress": "node --experimental-vm-modules tests/design-progress.mjs",
+    "test:design-progress-runtime": "node --experimental-vm-modules tests/design-progress-runtime.mjs",
+    "test:project-ownership": "node --test tests/project-ownership-migration.test.mjs tests/owner-transfer-render.test.mjs && node --experimental-vm-modules tests/project-ownership.mjs",
+    "test:project-ownership-runtime": "node --experimental-vm-modules tests/project-ownership-runtime.mjs",
+    "test:project-lifecycle": "node --test tests/project-lifecycle-migration.test.mjs && node --experimental-vm-modules tests/project-lifecycle.mjs",
+    "test:project-lifecycle-runtime": "node --experimental-vm-modules tests/project-lifecycle-runtime.mjs",
+    "test:transactions-runtime": "node --experimental-vm-modules tests/revision-transactions-runtime.mjs",
+    "test:backup": "node --test tests/local-backup.test.mjs && npm run test:local-release",
+    "test:backup-runtime": "node tests/local-backup-runtime.mjs",
+    "security:audit": "node scripts/audit-dependencies.mjs",
+    "backup:local": "node scripts/local-backup.mjs create",
+    "backup:local:managed": "node scripts/local-backup.mjs create-managed",
+    "backup:verify": "node scripts/local-backup.mjs verify",
+    "backup:restore": "node scripts/local-backup.mjs restore",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
+    "docx": "9.6.1",
     "drizzle-orm": "0.45.2",
-    "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "fflate": "0.7.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "write-excel-file": "4.1.1"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "1.37.1",
+    "@cloudflare/vite-plugin": "1.47.0",
     "@tailwindcss/postcss": "4.2.1",
     "@types/node": "22.19.19",
     "@types/react": "19.2.14",
@@ -29,13 +74,23 @@
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
-    "react-server-dom-webpack": "19.2.6",
+    "image-size": "2.0.2",
+    "miniflare": "4.20260722.0",
+    "react-server-dom-webpack": "19.2.8",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "typescript-eslint": "8.59.3",
     "vinext": "0.0.50",
-    "vite": "8.0.13",
-    "wrangler": "4.92.0"
+    "vite": "8.2.2",
+    "wrangler": "4.114.0"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.12"
+    },
+    "miniflare": {
+      "undici": "7.29.0"
+    }
   },
   "type": "module"
 }
