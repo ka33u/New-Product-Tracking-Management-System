@@ -27,6 +27,8 @@
 
 环境要求：Node.js `>=22.16.0`。
 
+HTTP 新建项目白屏与 Windows 重启反馈的修复范围、隔离测试及已有安装更新步骤，见 [Issue 修复与复测](docs/issue-fixes-2026-09-10.md)。迁移失败仍拒绝启动，不通过删除数据或跳过迁移处理启动异常。
+
 ```bash
 npm install
 npm run build

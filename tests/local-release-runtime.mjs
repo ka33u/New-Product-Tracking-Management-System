@@ -12,7 +12,7 @@ const project = fileURLToPath(new URL("../", import.meta.url));
 const root = await mkdtemp(path.join(tmpdir(), "hengda-release-runtime-"));
 await cp(path.join(project, "dist"), path.join(root, "dist"), { recursive: true });
 await mkdir(path.join(root, "scripts")); await mkdir(path.join(root, "drizzle"));
-for (const file of ["local-server.mjs", "local-runtime.mjs", "local-release.mjs", "local-migrations.mjs"]) {
+for (const file of ["local-server.mjs", "local-runtime.mjs", "local-runtime-worker.mjs", "local-release.mjs", "local-migrations.mjs"]) {
   await copyFile(path.join(project, "scripts", file), path.join(root, "scripts", file));
 }
 for (const name of localMigrationNames) await copyFile(path.join(project, "drizzle", `${name}.sql`), path.join(root, "drizzle", `${name}.sql`));
@@ -65,6 +65,7 @@ try {
   await writeFile(path.join(root, "dist/client/assets", asset), "REBUILT-ASSET-MUST-NOT-LEAK");
   await writeFile(path.join(root, "dist/server/index.js"), "throw new Error('half-built worker');");
   await writeFile(path.join(root, "scripts/local-runtime.mjs"), "throw new Error('unreleased runtime');");
+  await writeFile(path.join(root, "scripts/local-runtime-worker.mjs"), "throw new Error('unreleased worker bootstrap');");
   await writeFile(path.join(root, "scripts/local-migrations.mjs"), "this is not valid javascript");
   await writeFile(path.join(root, "drizzle", `${localMigrationNames[0]}.sql`), "NOT VALID SQL");
   assert.equal(await fetchText(`${runtime.base}/assets/${asset}`), expected);

@@ -49,7 +49,7 @@ export async function prepareRelease(root = defaultRoot) {
   if (!Array.isArray(localMigrationNames) || localMigrationNames.some((name) => !/^\d{4}_[a-z0-9_]+$/.test(name))) throw new Error("本地迁移清单无效。");
   const id = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "") + "-" + randomBytes(6).toString("hex");
   const directory = await mkdtemp(path.join(base, ".preparing-"));
-  const sourcePaths = ["scripts/local-runtime.mjs", "scripts/local-migrations.mjs", "package.json", "package-lock.json",
+  const sourcePaths = ["scripts/local-runtime.mjs", "scripts/local-runtime-worker.mjs", "scripts/local-migrations.mjs", "package.json", "package-lock.json",
     ...localMigrationNames.map((name) => `drizzle/${name}.sql`)];
   const files = (await inventory(path.join(root, "dist"), "dist"));
   for (const relative of sourcePaths) {

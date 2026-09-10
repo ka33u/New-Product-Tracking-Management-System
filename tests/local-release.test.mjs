@@ -13,6 +13,7 @@ async function fixture() {
     "dist/server/wrangler.json": JSON.stringify({ vars: { NPD_AUTH_MODE: "local" }, main: "index.js", assets: { directory: "../client" },
       d1_databases: [{ binding: "DB", database_id: "same-database" }], r2_buckets: [{ binding: "FILES", bucket_name: "same-files" }] }),
     "scripts/local-runtime.mjs": "export const startLocalRuntime=()=>{};",
+    "scripts/local-runtime-worker.mjs": "// isolated worker bootstrap fixture",
     "scripts/local-migrations.mjs": "export const localMigrationNames=['0001_fixture'];",
     "drizzle/0001_fixture.sql": "SELECT 1;", "package.json": '{"type":"module"}', "package-lock.json": "{}",
     "node_modules/miniflare/package.json": '{"version":"fixture"}',
